@@ -2,19 +2,20 @@
 
 ## Project Structure & Module Organization
 
-`app/macOS/` contains the current Swift playback prototypes: the source abstraction, SMB adapter, and FFmpeg AVIO bridge. Keep platform-neutral playback code independent of SwiftUI/AppKit so it can later move into shared Swift packages for macOS and iOS. `docs/prd/` holds early requirements, `docs/analazy/` contains Infuse research, and `docs/superpowers/specs/` contains the approved architecture. Treat `data/` as local test-data space; do not commit copyrighted media or credentials.
+`Sources/` contains the active SwiftPM modules: media-source contracts, stream I/O, playback state, telemetry, and the macOS app shell. Tests mirror them under `Tests/<ModuleName>Tests/`. `app/macOS/` retains pre-package prototypes for reference; do not extend those files. Architecture and plans live under `docs/superpowers/`. Treat `data/` as ignored local test-data space; never commit copyrighted media or credentials.
 
 ## Build, Test, and Development Commands
 
-This repository does not yet contain a `Package.swift`, `.xcodeproj`, test target, or reproducible FFmpeg build. Do not claim a successful application build until those are added. Useful current checks are:
+Use Swift Package Manager from the repository root:
 
 ```bash
-rg --files                         # Inspect the repository surface
-swiftc -parse app/macOS/MediaSource.swift
-rg -n "TODO|FIXME" app docs       # Find known prototype gaps
+swift build                 # Build libraries and macOS executable
+swift test                  # Run all Swift Testing suites
+swift run PierPlayerApp     # Launch the foundation app shell
+scripts/check.sh            # Test, Release-build, and check whitespace
 ```
 
-When build tooling is introduced, document the exact `swift build`, `swift test`, or `xcodebuild` commands here in the same change.
+The checked-in package intentionally has no FFmpeg or libsmb2 dependency yet. Do not use the GPL-enabled Homebrew FFmpeg as a production linkage.
 
 ## Coding Style & Naming Conventions
 
@@ -22,11 +23,11 @@ Follow Swift API Design Guidelines and use four-space indentation. Name types an
 
 ## Testing Guidelines
 
-Add tests under `Tests/<ModuleName>Tests/` when the package structure is created, with behavior-focused names such as `testSeekDiscardsPreviousGeneration`. Cover cache boundaries, EOF, cancellation, state transitions, timestamp conversion, and retry limits. Playback hot-path changes also require a Release-mode benchmark report using the fixed media/network matrix in the architecture specification. Never replace deterministic fixtures with private NAS media.
+Add behavior-focused Swift Testing cases under `Tests/<ModuleName>Tests/`, such as `staleSeekCompletionCannotChangeCurrentState`. Follow red-green-refactor and run the focused test before the full suite. Cover cache boundaries, EOF, cancellation, state transitions, timestamp conversion, and retry limits. Playback hot-path changes also require a Release benchmark report using the architecture's fixed media/network matrix.
 
 ## Commit & Pull Request Guidelines
 
-No Git history exists in this directory, so there is no established convention to preserve. After repository initialization, use focused, imperative Conventional Commit messages, for example `feat(stream-io): add aligned page cache`. Pull requests should explain scope and tradeoffs, link the relevant design section, list verification commands, and include before/after performance metrics for I/O, decode, rendering, or memory changes. Include screenshots only for visible UI changes.
+Use focused, imperative Conventional Commit messages, for example `feat(stream-io): add aligned page cache`. Pull requests should explain scope and tradeoffs, link the relevant design section, list verification commands, and include before/after performance metrics for I/O, decode, rendering, or memory changes. Include screenshots only for visible UI changes.
 
 ## Security & Licensing
 
