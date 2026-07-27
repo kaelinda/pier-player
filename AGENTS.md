@@ -12,10 +12,11 @@ Use Swift Package Manager from the repository root:
 swift build                 # Build libraries and macOS executable
 swift test                  # Run all Swift Testing suites
 swift run PierPlayerApp     # Launch the foundation app shell
+swift run SMBProbe --help   # Show the opt-in NAS diagnostic usage
 scripts/check.sh            # Test, Release-build, and check whitespace
 ```
 
-The checked-in package intentionally has no FFmpeg or libsmb2 dependency yet. Do not use the GPL-enabled Homebrew FFmpeg as a production linkage.
+The package pins libsmb2 as an LGPL-2.1+ Git submodule. Initialize it with `git submodule update --init --recursive`. Do not use the GPL-enabled Homebrew FFmpeg as a production linkage.
 
 ## Coding Style & Naming Conventions
 

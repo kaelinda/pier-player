@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "PlaybackTelemetry", targets: ["PlaybackTelemetry"]),
         .library(name: "SMBSourceKit", targets: ["SMBSourceKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
+        .executable(name: "SMBProbe", targets: ["SMBProbe"]),
     ],
     targets: [
         .target(
@@ -62,6 +63,14 @@ let package = Package(
                 "PlaybackCore",
                 "PlaybackTelemetry",
                 "SMBSourceKit",
+            ]
+        ),
+        .executableTarget(
+            name: "SMBProbe",
+            dependencies: [
+                "MediaSourceKit",
+                "SMBSourceKit",
+                "StreamIOKit",
             ]
         ),
         .testTarget(
