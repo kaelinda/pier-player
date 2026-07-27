@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Product Teardown · Infuse — Firecore</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#faf6ec; --ink:#1c1a15; --muted:#6d675b; --line:#e4dcc8;
+  --accent:#e8b400; --accent-soft:#fdf3cf; --card:#ffffff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--paper);color:var(--ink);font-family:'Inter',-apple-system,sans-serif;font-size:15px;line-height:1.65}
+.wrap{max-width:880px;margin:0 auto;padding:0 28px 80px}
+.serif{font-family:'Fraunces',Georgia,serif}
+/* Cover */
+header.cover{padding:64px 0 40px;border-bottom:3px solid var(--ink)}
+.brand-eyebrow{font-weight:700;letter-spacing:.22em;font-size:12px;text-transform:uppercase}
+.brand-eyebrow .dot{color:var(--accent)}
+h1{font-family:'Fraunces',Georgia,serif;font-size:64px;font-weight:800;line-height:1.02;margin:18px 0 10px}
+.subtitle{font-size:18px;color:var(--muted);max-width:620px}
+.meta-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:34px}
+.meta-strip div{background:var(--card);padding:14px 16px}
+.meta-strip b{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+/* Sections */
+section{margin-top:56px}
+.sec-head{display:flex;align-items:baseline;gap:14px;border-bottom:2px solid var(--ink);padding-bottom:8px;margin-bottom:20px}
+.sec-num{font-family:'Fraunces',Georgia,serif;font-weight:800;font-size:15px;background:var(--accent);padding:2px 9px}
+h2{font-family:'Fraunces',Georgia,serif;font-size:27px;font-weight:800}
+h3{font-size:14px;letter-spacing:.08em;text-transform:uppercase;margin:20px 0 8px}
+p{margin-bottom:12px}
+ul{margin:0 0 12px 20px}
+li{margin-bottom:7px}
+.callout{background:var(--accent-soft);border-left:4px solid var(--accent);padding:14px 18px;margin:16px 0;font-weight:500}
+.tag{display:inline-block;background:var(--ink);color:var(--paper);font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:3px 10px;margin-right:6px}
+.inf{color:var(--muted);font-size:12.5px;font-style:italic}
+/* Tour */
+.tour{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px}
+.tour figure{background:var(--card);border:1px solid var(--line)}
+.tour img{width:100%;height:150px;object-fit:cover;display:block}
+.tour figcaption{padding:9px 11px;font-size:12px;color:var(--muted);line-height:1.45}
+/* Tables */
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:var(--card)}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--ink);color:var(--paper);font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+tr td:first-child{font-weight:600}
+/* Loop */
+.loop{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0}
+.loop .step{background:var(--card);border:2px solid var(--ink);padding:9px 14px;font-weight:600;font-size:13.5px}
+.loop .arrow{font-weight:800;color:var(--accent);font-size:18px}
+/* AI meter */
+.ai-meter{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin:16px 0}
+.ai-meter div{background:var(--card);padding:14px;text-align:center;font-weight:600;color:var(--muted)}
+.ai-meter div.active{background:var(--accent);color:var(--ink);position:relative}
+.ai-meter div.active::after{content:"◉ current";display:block;font-size:11px;font-weight:700;margin-top:4px}
+/* Verdict */
+.verdict{background:var(--ink);color:var(--paper);padding:32px;margin-top:20px}
+.verdict .serif{font-size:22px;line-height:1.5}
+.verdict .hl{color:var(--accent)}
+/* Lang switch */
+.lang{position:fixed;bottom:22px;right:22px;display:flex;background:var(--card);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--accent);z-index:9}
+.lang a{padding:8px 16px;text-decoration:none;color:var(--ink);font-weight:700;font-size:13px}
+.lang a.active{background:var(--ink);color:var(--paper)}
+/* Footer */
+footer{margin-top:72px;border-top:3px solid var(--ink);padding-top:22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.brand-mark{font-family:'Fraunces',Georgia,serif;font-weight:800;font-size:20px}
+.brand-mark .dot{color:var(--accent)}
+footer .links a{color:var(--muted);text-decoration:none;font-size:13px;margin-left:16px;font-weight:600}
+footer .links a:hover{color:var(--ink)}
+@media print{.lang{display:none}body{font-size:12px}h1{font-size:44px}.tour img{height:110px}}
+@media (max-width:640px){h1{font-size:40px}.meta-strip{grid-template-columns:1fr 1fr}.tour{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="cover">
+  <div class="brand-eyebrow">TEARDOWN<span class="dot">.</span> &nbsp;PRODUCT ANALYSIS · JULY 2026</div>
+  <h1>Infuse</h1>
+  <p class="subtitle">The player that plays it all — how Firecore turned "playing a file" into system-level craft, and built a narrow but very deep moat on Apple's platforms.</p>
+  <div class="meta-strip">
+    <div><b>Category</b>Private media library player</div>
+    <div><b>Users</b>NAS &amp; self-hosting enthusiasts, Plex/Jellyfin refugees, cloud-drive viewers</div>
+    <div><b>Model</b>Freemium · $1.99/mo · $16.99/yr · $99.99 lifetime</div>
+    <div><b>Stage</b>Mature · v8.4 · shipping since 2013</div>
+  </div>
+</header>
+
+<section>
+  <div class="sec-head"><span class="sec-num">—</span><h2>Product Tour</h2></div>
+  <div class="tour">
+    <figure><img src="https://firecore.com/themes/main/images/infuse-hero_2x.webp" alt="Infuse on all Apple devices"><figcaption>One library model across five Apple surfaces — TV, iPad, iPhone, Vision, Mac.</figcaption></figure>
+    <figure><img src="https://firecore.com/themes/main/images/feature-library.jpg" alt="Library"><figcaption>The Aha moment: messy folders become an App-Store-grade poster wall, automatically.</figcaption></figure>
+    <figure><img src="https://firecore.com/themes/main/images/feature-playback.jpg" alt="Playback"><figcaption>Direct-play engine: MKV, ISO, BDMV — no transcoding, hardware decode, real Dolby Vision.</figcaption></figure>
+    <figure><img src="https://firecore.com/themes/main/images/feature-streaming.jpg" alt="Streaming"><figcaption>Source-agnostic: SMB, NFS, WebDAV, Plex/Emby/Jellyfin, and 10+ cloud drives.</figcaption></figure>
+    <figure><img src="https://static.firecore.com/fav/infuse-og-card.jpg" alt="Infuse card"><figcaption>Positioning in one line: an elegant video player — beauty as the wedge, engine as the moat.</figcaption></figure>
+    <figure><img src="https://static.firecore.com/fav/infuse-twitter-card.jpg" alt="Infuse brand"><figcaption>Quiet-tool philosophy: no ads, no tracking, no content push — restraint reads as premium.</figcaption></figure>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">1</span><h2>Product Snapshot</h2></div>
+  <p>Infuse is a media player for the full Apple stack (iPhone, iPad, Apple TV, Mac, Vision Pro) that bridges local files, NAS boxes, cloud drives, and media servers into one beautifully organized library. Core promise: <b>"A player that plays it all"</b> — your messy video folders become a Netflix-grade private streaming service.</p>
+  <ul>
+    <li><b>Positioning:</b> prettier than VLC, a stronger playback engine than Plex's own client, 100% Apple-native.</li>
+    <li><b>Stage:</b> mature. Infuse 8 shipped as a free upgrade with a native Vision Pro app; v8.4 (Mar 2026) added extras browsing, community-powered intro/credit skipping, and a playback-core overhaul.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">2</span><h2>Target Users &amp; JTBD</h2></div>
+  <ul>
+    <li><b>NAS / self-hosting enthusiasts</b> with remux, full-disc, Dolby Vision collections.</li>
+    <li><b>Plex / Emby / Jellyfin server owners</b> who keep the server but want a better client ("just a better client than Plex itself" — recurring App Store review theme).</li>
+    <li><b>Chinese cloud-drive viewers</b> — Aliyun, 115, 123, Baidu NetDisk are all first-class sources, plus a dedicated firecore.cn site. A deliberately cultivated market.</li>
+  </ul>
+  <p><b>Functional JTBD:</b> "The videos on my drives should just play on my Apple devices — no transcoding, no format fiddling, correct subtitles and audio."</p>
+  <p><b>What it replaces</b> (more revealing than who uses it): VLC (plays but ugly, weak on tvOS), Plex's client (weak engine, server-side transcoding), Kodi (painful on tvOS), and the prehistoric "transcode into iTunes" workflow.</p>
+  <p><b>Emotional JTBD:</b> pride in a collection presented with App-Store polish; the safety of "no ads, no tracking, no library harvesting — ever."</p>
+  <p><b>Trigger &amp; frequency:</b> evening living-room moment, "what shall we watch tonight" → open Infuse. High frequency, long sessions.</p>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">3</span><h2>Core Product Loop</h2></div>
+  <div class="loop">
+    <span class="step">Want to watch (trigger)</span><span class="arrow">→</span>
+    <span class="step">Browse poster wall</span><span class="arrow">→</span>
+    <span class="step">Instant direct-play, correct DV/audio (reward)</span><span class="arrow">→</span>
+    <span class="step">Progress syncs, new files auto-scraped (return)</span>
+  </div>
+  <ul>
+    <li><b>Acquisition:</b> App Store search + community word of mouth (r/selfhosted, NAS forums, Chinese cloud-drive communities). Free download, zero friction.</li>
+    <li><b>Activation (Aha):</b> seconds after connecting the first source — metadata, posters, cast, ratings, trailers arrive automatically. "My garbage folder became a streaming homepage."</li>
+    <li><b>Retention:</b> the library itself is a sunk asset; iCloud-synced watch state; Trakt scrobbling; the subscription itself.</li>
+    <li><b>Virality:</b> weak — single-household tool. Growth rides word of mouth and Plex's self-inflicted wounds.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">4</span><h2>Architecture &amp; UX System</h2></div>
+  <p>Entity chain: <b>Share (source) → Library → Item (TMDB-backed) → Collection / Playlist.</b></p>
+  <div class="callout">The real primitive is <b>source-agnosticism</b>: SMB, NFS, FTP, WebDAV, UPnP, Emby/Jellyfin/Plex, plus 10+ cloud drives all normalize into one library model. The poster wall is a feature; "every source looks the same" is the architectural bet.</div>
+  <p>Five platforms share one model, with iCloud as the state layer. Underneath sits a proprietary direct-play engine — MKV, ISO, BDMV without transcoding, hardware-decoded on Apple Silicon — which is the technical foundation Plex's client cannot match.</p>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">5</span><h2>Design Language &amp; Craft Signals</h2></div>
+  <ul>
+    <li><b>Direct-play, no-transcode engine</b> — zero server load, lossless quality. Competitors lean on server transcoding; weak NAS boxes collapse.</li>
+    <li><b>HDR correctness as craft</b> — Dolby Vision Profile 5 &amp; 8, HDR10+, HLG mapped properly on Apple hardware. Most players "play" DV but botch tone mapping; enthusiasts spot it instantly.</li>
+    <li><b>Zero-config scraping</b> — versus Kodi's scraper-configuration hell, Infuse is "connect and it's done."</li>
+    <li><b>Platform-native follow-through</b> — Liquid Glass on macOS 26, auto dark/light icons, visionOS immersive environments. Cross-platform rivals ship one UI for everything; Infuse feels system-built on every device.</li>
+    <li><b>Silence philosophy</b> — no content push, no marketing notifications, no ads. Tool-like restraint reads as premium.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">6</span><h2>Value Delivery &amp; UX Quality</h2></div>
+  <ul>
+    <li><b>Time-to-value:</b> minutes (install → connect → scraped). Near-instant for existing Plex/Jellyfin users — log in, full library.</li>
+    <li><b>Cognitive load:</b> minimal during playback; <b>medium-high during first connection</b> — SMB paths, ports, permissions remain a real barrier. The biggest leak in the funnel.</li>
+    <li><b>Trust:</b> 13 years of updates, an explicit privacy stance, decade-long five-star reviews.</li>
+    <li><b>Struggle points:</b> initial scrape wait on huge libraries; edge-case codecs (AVS requests in reviews); hitting the DTS paywall with a file already downloaded.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">7</span><h2>Business Model &amp; Monetization</h2></div>
+  <p>Freemium subscription. Free is a complete player; Pro unlocks extra formats, DTS-HD / lossless audio, AirPlay &amp; Google Cast, Dolby Vision &amp; Atmos, cloud-drive sources, advanced iCloud sync. 7-day trial, Family Sharing.</p>
+  <div class="callout">The paywall cuts along <b>formats / audio / cloud</b> — precisely where enthusiasm and willingness to pay coincide. People who want Atmos are exactly the people who will pay. No ads means revenue is 100% subscription: the product only ever needs to please users.</div>
+  <p>Subscriptions include lifetime major-version updates (v9, v10 and beyond) — defusing the "pay again for the big release" resentment. Lifetime at $99.99 ≈ 6 years of the annual plan; <span class="inf">[inferred] annual is the workhorse SKU, lifetime exists to convert the 2013-era legacy base.</span></p>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">8</span><h2>Competitor Landscape</h2></div>
+  <table>
+    <tr><th>Dimension</th><th>Infuse</th><th>Plex client</th><th>VLC</th><th>Vidhub / SenPlayer (CN)</th><th>Jellyfin official</th></tr>
+    <tr><td>Playback engine</td><td>★★★★★ direct-play</td><td>★★☆ transcoding-bound</td><td>★★★★ weak HDR</td><td>★★★★ fast follower</td><td>★★☆</td></tr>
+    <tr><td>Library &amp; scraping</td><td>★★★★★</td><td>★★★★ (server-side)</td><td>★☆</td><td>★★★★</td><td>★★★</td></tr>
+    <tr><td>Platform-native craft</td><td>★★★★★ Apple-only focus</td><td>★★★</td><td>★★</td><td>★★★</td><td>★★</td></tr>
+    <tr><td>Price / cross-platform</td><td>★★☆ Apple-only, subs</td><td>★★★★ everywhere</td><td>★★★★★ free everywhere</td><td>★★★★ cheaper</td><td>★★★★★ free</td></tr>
+  </table>
+  <p><b>Where Infuse still wins:</b> the engine, the craft, and the "Plex refugee" position — every Plex price hike or ad-supported content push hands Infuse new users.</p>
+  <p><b>Where rivals are closing:</b> Chinese players are more aggressive on cloud-drive support at lower prices, pressing Infuse in a market it clearly values; Jellyfin's ecosystem clients keep improving.</p>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">9</span><h2>Growth Strategy <span class="inf">[inferred]</span></h2></div>
+  <ul>
+    <li><b>Channels:</b> App Store ASO, Reddit/NAS community word of mouth, rebound traffic from every Plex misstep, firecore.cn localization.</li>
+    <li><b>PLG loop:</b> free version is a full player → user hits a concrete moment ("this format won't play / I want my cloud drive / I want sync") → 7-day trial → subscription.</li>
+    <li><b>Expansion vectors:</b> vertical (offline downloads, household profiles, deeper server features) &gt; platform (staying Apple-only is both the choice and the ceiling) &gt; horizontal (music/comics — unlikely, and rightly so).</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">10</span><h2>AI / Future Readiness</h2></div>
+  <div class="ai-meter">
+    <div class="active">Assistive</div>
+    <div>Embedded</div>
+    <div>Autonomous</div>
+  </div>
+  <p><b>Evidence:</b> AI video upscaling (making low-res sources look good on big screens) is the only genuine AI feature; intro/credit skipping is community data (IntroDB), not AI. Firmly at the left of the spectrum.</p>
+  <ul>
+    <li><b>Opportunities:</b> on-device Whisper subtitle generation/translation (kills the last subtitle pain, a natural Pro headline); semantic library search ("that movie where Denzel plays a lawyer"); a "tonight's pick" recommender over the user's own library.</li>
+    <li><b>Strategic risk:</b> low — playback is infrastructure. But Apple's system-level AI could absorb the search and subtitle scenarios.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">11</span><h2>Metrics They Actually Optimize <span class="inf">[inferred]</span></h2></div>
+  <ul>
+    <li><b>North Star: Weekly Watching Households</b> — not downloads. Only households that keep watching keep renewing, and the household is the subscription unit (Family Sharing).</li>
+    <li><b>Inputs:</b> first-source connection success rate; first-scrape completion rate; trial → paid conversion.</li>
+    <li><b>Guardrail:</b> playback success / crash rate — no feature may compromise "press play and it plays."</li>
+    <li><b>Blindspot:</b> why free users churn (no tracking = no data — the cost of the privacy promise), and the needs of mixed Android/Windows households. Refusing to look caps the market.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">12</span><h2>Friction &amp; Weaknesses</h2></div>
+  <ul>
+    <li><b>First-connection cliff</b> — SMB/NFS is jargon to normal humans; the funnel's biggest leak.</li>
+    <li><b>Paywall collision timing</b> — discovering DTS won't play while already on the couch, file downloaded. Converts well; feels bad.</li>
+    <li><b>Single-platform ceiling</b> — no Android, Windows, or TV boxes; mixed-device households churn as a unit.</li>
+    <li><b>Third-party dependency</b> — TMDB (metadata), OpenSubtitles (subs), Trakt (scrobbling). Any API tightening is an experience-level incident.</li>
+    <li><b>Grey-zone adjacency</b> — a "plays everything" player lives next door to piracy narratives; a platform/PR risk even though the product is neutral.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">13</span><h2>Risk Matrix</h2></div>
+  <table>
+    <tr><th>Risk</th><th>Category</th><th>Severity</th><th>Likelihood</th><th>Mitigation</th></tr>
+    <tr><td>Chinese rivals win cloud-drive users on price</td><td>Competitive</td><td>High</td><td>High · ongoing 12 mo</td><td>Regional pricing + exclusive deep integrations with top drives</td></tr>
+    <tr><td>Plex/Jellyfin clients close the engine gap</td><td>Competitive</td><td>Med</td><td>Med · 18–24 mo</td><td>Maintain DV/audio lead; make library UX a second moat</td></tr>
+    <tr><td>TMDB / OpenSubtitles API tightening</td><td>Technical</td><td>Med</td><td>Low-Med</td><td>Multi-scraper redundancy + local metadata cache/export</td></tr>
+    <tr><td>App-review pressure via piracy association</td><td>Regulatory</td><td>Med</td><td>Low</td><td>Hold the neutral-tool line; never touch content distribution</td></tr>
+  </table>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">14</span><h2>Opportunities &amp; Redesign Ideas</h2></div>
+  <h3>Three product improvements</h3>
+  <ul>
+    <li><b>Guided connection wizard</b> — scan the LAN, auto-discover NAS/servers, one-tap setup. Patches the biggest funnel hole directly.</li>
+    <li><b>Household profiles</b> — per-person Continue Watching; matches the reality that the household is the subscription unit, and hardens Family Sharing renewals.</li>
+    <li><b>On-device AI subtitles</b> (Whisper generate + translate) — the sharpest remaining pain and the natural next Pro headline.</li>
+  </ul>
+  <h3>One strategic shift</h3>
+  <p>Become <b>the front-end standard for private media</b>: "Works with Infuse" certification pre-installed with NAS vendors (Synology, Ugreen, ZSpace) — moving acquisition upstream to the hardware-purchase moment.</p>
+  <h3>Moonshot</h3>
+  <p><b>Infuse Relay</b> — a lightweight remote-access relay (no transcoding; just NAT traversal + encrypted direct connect). It eats Plex's last reason to exist and completes the "Jellyfin + Infuse" replacement stack.</p>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">15</span><h2>Final PM Verdict</h2></div>
+  <div class="verdict">
+    <p class="serif"><span class="hl">Wins</span> by turning "play a file" into system-level craft, with a paywall aligned millimetrically to enthusiast demand. <span class="hl">Breaks</span> at the single-platform ceiling, the first-connection cliff, and Chinese price competition. <span class="hl">Moat:</span> a proprietary engine + a 13-year format-compatibility long tail + the user's own library as a sunk asset — narrow, but very deep.</p>
+    <p class="serif" style="margin-top:16px">"Infuse doesn't need more features. It needs first-source connection success up 20 points — and to be standing at the door every time Plex stumbles."</p>
+  </div>
+</section>
+
+<div class="lang">
+  <a href="product-teardown-infuse-en-202607.html" class="active">EN</a>
+  <a href="product-teardown-infuse-zh-202607.html">中文</a>
+</div>
+
+<footer>
+  <div class="brand-mark">TEARDOWN<span class="dot">.</span></div>
+  <div class="links">
+    Created with the Product Teardown Skill by Dreameryanyan
+    <a href="https://www.linkedin.com/in/yanliudesign/">LinkedIn</a>
+    <a href="https://x.com/yanliudreamer">X</a>
+    <a href="https://www.xiaohongshu.com/user/profile/5b2afdf311be104ac3c22931">Xiaohongshu</a>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>
