@@ -136,22 +136,22 @@ private actor FakeSMBClient: SMBClient {
         self.error = error
     }
 
-    func connect() throws {
+    func connect() async throws {
         events.append(.connect)
         if let error { throw error }
     }
 
-    func disconnect() {
+    func disconnect() async {
         events.append(.disconnect)
     }
 
-    func list(directory path: SMBPath) throws -> [SMBDirectoryEntry] {
+    func list(directory path: SMBPath) async throws -> [SMBDirectoryEntry] {
         events.append(.list(path))
         if let error { throw error }
         return entries
     }
 
-    func open(file path: SMBPath) throws -> SMBOpenedFile {
+    func open(file path: SMBPath) async throws -> SMBOpenedFile {
         events.append(.open(path))
         if let error { throw error }
         return openedFile
@@ -174,7 +174,7 @@ private actor FakeSMBClientFile: SMBClientFile {
         self.error = error
     }
 
-    func read(at offset: Int64, length: Int) throws -> Data {
+    func read(at offset: Int64, length: Int) async throws -> Data {
         reads.append(.init(offset: offset, length: length))
         if let error { throw error }
         let start = Int(offset)
@@ -182,7 +182,7 @@ private actor FakeSMBClientFile: SMBClientFile {
         return data.subdata(in: start..<end)
     }
 
-    func close() {
+    func close() async {
         closeCount += 1
     }
 }

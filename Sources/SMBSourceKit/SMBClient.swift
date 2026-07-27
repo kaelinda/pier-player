@@ -42,14 +42,14 @@ public struct SMBOpenedFile: Sendable {
     }
 }
 
-public protocol SMBClient: Actor {
-    func connect() throws
-    func disconnect()
-    func list(directory path: SMBPath) throws -> [SMBDirectoryEntry]
-    func open(file path: SMBPath) throws -> SMBOpenedFile
+public protocol SMBClient: Sendable {
+    func connect() async throws
+    func disconnect() async
+    func list(directory path: SMBPath) async throws -> [SMBDirectoryEntry]
+    func open(file path: SMBPath) async throws -> SMBOpenedFile
 }
 
-public protocol SMBClientFile: Actor {
-    func read(at offset: Int64, length: Int) throws -> Data
-    func close()
+public protocol SMBClientFile: Sendable {
+    func read(at offset: Int64, length: Int) async throws -> Data
+    func close() async
 }
