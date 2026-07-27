@@ -93,7 +93,7 @@ public actor PlaybackSession {
             )
         }
 
-        let token = nextGeneration()
+        let token = try nextGeneration(command: "seek")
         update(state: .buffering(.seek), position: position)
         return token
     }
@@ -110,7 +110,7 @@ public actor PlaybackSession {
             )
         }
 
-        let token = nextGeneration()
+        let token = try nextGeneration(command: "beginReconnection")
         update(state: .reconnecting)
         return token
     }
@@ -140,11 +140,17 @@ public actor PlaybackSession {
         token.sessionID == snapshot.sessionID && token.generation == snapshot.generation
     }
 
-    private func nextGeneration() -> PlaybackOperationToken {
+    private func nextGeneration(command: String) throws -> PlaybackOperationToken {
+        guard let sessionID = snapshot.sessionID else {
+            throw PlaybackCommandError.invalidTransition(
+                state: snapshot.state,
+                command: command
+            )
+        }
         let generation = snapshot.generation &+ 1
         update(generation: generation)
         return PlaybackOperationToken(
-            sessionID: snapshot.sessionID!,
+            sessionID: sessionID,
             generation: generation
         )
     }
