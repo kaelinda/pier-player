@@ -1,15 +1,29 @@
+import SMBSourceKit
 import SwiftUI
 
 struct RootView: View {
     @StateObject private var model = AppModel()
+    @State private var isAddingSource = false
+    @State private var selectedSourceID: UUID?
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 List {
                     Section("Sources") {
-                        Label("No SMB sources", systemImage: "externaldrive")
-                            .foregroundStyle(.secondary)
+                        if model.sources.isEmpty {
+                            Label("No SMB sources", systemImage: "externaldrive")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(model.sources) { source in
+                                Label(source.displayName, systemImage: "externaldrive.connected.to.line.below")
+                                    .tag(source.id)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedSourceID = source.id
+                                    }
+                            }
+                        }
                     }
                 }
 
@@ -21,12 +35,12 @@ struct RootView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button {
+                        isAddingSource = true
                     } label: {
                         Image(systemName: "plus")
                     }
                     .buttonStyle(.plain)
                     .frame(width: 28, height: 28)
-                    .disabled(true)
                     .help("Add SMB Source")
                 }
                 .padding(.horizontal, 12)
@@ -34,20 +48,39 @@ struct RootView: View {
             }
             .navigationTitle("Pier Player")
         } detail: {
-            VStack(spacing: 0) {
-                ContentUnavailableView(
-                    "No Source Selected",
-                    systemImage: "play.rectangle",
-                    description: Text("Connect an SMB share to browse media.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let source = model.source(id: selectedSourceID) {
+                VStack(spacing: 0) {
+                    List(source.rootItems, id: \.path) { item in
+                        Label(
+                            item.name,
+                            systemImage: item.kind == .directory ? "folder" : "film"
+                        )
+                    }
+                    .navigationTitle(source.displayName)
 
-                Divider()
+                    Divider()
 
-                playbackControls
+                    playbackControls
+                }
+            } else {
+                VStack(spacing: 0) {
+                    ContentUnavailableView(
+                        "No Source Selected",
+                        systemImage: "play.rectangle",
+                        description: Text("Connect an SMB share to browse media.")
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Divider()
+
+                    playbackControls
+                }
             }
         }
         .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 300)
+        .sheet(isPresented: $isAddingSource) {
+            AddSMBSourceView(model: model)
+        }
     }
 
     private var playbackControls: some View {

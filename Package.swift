@@ -61,6 +61,7 @@ let package = Package(
                 "StreamIOKit",
                 "PlaybackCore",
                 "PlaybackTelemetry",
+                "SMBSourceKit",
             ]
         ),
         .testTarget(
