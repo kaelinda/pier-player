@@ -43,7 +43,10 @@ let package = Package(
         .target(name: "MediaSourceKit"),
         .target(
             name: "SMBSourceKit",
-            dependencies: ["MediaSourceKit", "CLibSMB2"]
+            dependencies: ["MediaSourceKit", "CLibSMB2"],
+            linkerSettings: [
+                .linkedFramework("Security"),
+            ]
         ),
         .target(
             name: "StreamIOKit",
