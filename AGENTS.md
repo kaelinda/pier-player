@@ -2,13 +2,14 @@
 
 ## Project Structure & Module Organization
 
-`Sources/` contains the active SwiftPM modules: media-source contracts, stream I/O, playback state, telemetry, and the macOS app shell. Tests mirror them under `Tests/<ModuleName>Tests/`. `app/macOS/` retains pre-package prototypes for reference; do not extend those files. Architecture and plans live under `docs/superpowers/`. Treat `data/` as ignored local test-data space; never commit copyrighted media or credentials.
+`app/` contains the complete SwiftPM project. Cross-platform modules and tests live under `app/Shared/`. Platform clients are separated into `app/macOS/`, `app/iOS/`, and `app/tvOS/`; only the macOS shell is implemented today. Developer tools live in `app/Tools/`, vendored native dependencies in `app/Vendor/`, and scripts in `app/scripts/`. Files under `app/macOS/Legacy/` are pre-package prototypes; do not extend them. Architecture and plans live under `docs/superpowers/`. Treat `data/` as ignored local test-data space; never commit copyrighted media or credentials.
 
 ## Build, Test, and Development Commands
 
-Use Swift Package Manager from the repository root:
+Use Swift Package Manager from the application directory:
 
 ```bash
+cd app
 swift build                 # Build libraries and macOS executable
 swift test                  # Run all Swift Testing suites
 swift run PierPlayerApp     # Launch the foundation app shell
@@ -24,7 +25,7 @@ Follow Swift API Design Guidelines and use four-space indentation. Name types an
 
 ## Testing Guidelines
 
-Add behavior-focused Swift Testing cases under `Tests/<ModuleName>Tests/`, such as `staleSeekCompletionCannotChangeCurrentState`. Follow red-green-refactor and run the focused test before the full suite. Cover cache boundaries, EOF, cancellation, state transitions, timestamp conversion, and retry limits. Playback hot-path changes also require a Release benchmark report using the architecture's fixed media/network matrix.
+Add shared behavior tests under `app/Shared/Tests/<ModuleName>Tests/` and platform tests under the matching platform directory, such as `app/macOS/Tests/`. Follow red-green-refactor and run the focused test before the full suite. Cover cache boundaries, EOF, cancellation, state transitions, timestamp conversion, and retry limits. Playback hot-path changes also require a Release benchmark report using the architecture's fixed media/network matrix.
 
 ## Commit & Pull Request Guidelines
 

@@ -41,20 +41,31 @@ let package = Package(
                 .define("HAVE_CONFIG_H", to: "1"),
             ]
         ),
-        .target(name: "MediaSourceKit"),
+        .target(
+            name: "MediaSourceKit",
+            path: "Shared/Sources/MediaSourceKit"
+        ),
         .target(
             name: "SMBSourceKit",
             dependencies: ["MediaSourceKit", "CLibSMB2"],
+            path: "Shared/Sources/SMBSourceKit",
             linkerSettings: [
                 .linkedFramework("Security"),
             ]
         ),
         .target(
             name: "StreamIOKit",
-            dependencies: ["MediaSourceKit"]
+            dependencies: ["MediaSourceKit"],
+            path: "Shared/Sources/StreamIOKit"
         ),
-        .target(name: "PlaybackCore"),
-        .target(name: "PlaybackTelemetry"),
+        .target(
+            name: "PlaybackCore",
+            path: "Shared/Sources/PlaybackCore"
+        ),
+        .target(
+            name: "PlaybackTelemetry",
+            path: "Shared/Sources/PlaybackTelemetry"
+        ),
         .executableTarget(
             name: "PierPlayerApp",
             dependencies: [
@@ -63,7 +74,8 @@ let package = Package(
                 "PlaybackCore",
                 "PlaybackTelemetry",
                 "SMBSourceKit",
-            ]
+            ],
+            path: "macOS/Sources/PierPlayerApp"
         ),
         .executableTarget(
             name: "SMBProbe",
@@ -71,31 +83,38 @@ let package = Package(
                 "MediaSourceKit",
                 "SMBSourceKit",
                 "StreamIOKit",
-            ]
+            ],
+            path: "Tools/SMBProbe"
         ),
         .testTarget(
             name: "MediaSourceKitTests",
-            dependencies: ["MediaSourceKit"]
+            dependencies: ["MediaSourceKit"],
+            path: "Shared/Tests/MediaSourceKitTests"
         ),
         .testTarget(
             name: "StreamIOKitTests",
-            dependencies: ["StreamIOKit", "MediaSourceKit"]
+            dependencies: ["StreamIOKit", "MediaSourceKit"],
+            path: "Shared/Tests/StreamIOKitTests"
         ),
         .testTarget(
             name: "SMBSourceKitTests",
-            dependencies: ["SMBSourceKit"]
+            dependencies: ["SMBSourceKit"],
+            path: "Shared/Tests/SMBSourceKitTests"
         ),
         .testTarget(
             name: "PlaybackCoreTests",
-            dependencies: ["PlaybackCore"]
+            dependencies: ["PlaybackCore"],
+            path: "Shared/Tests/PlaybackCoreTests"
         ),
         .testTarget(
             name: "PlaybackTelemetryTests",
-            dependencies: ["PlaybackTelemetry"]
+            dependencies: ["PlaybackTelemetry"],
+            path: "Shared/Tests/PlaybackTelemetryTests"
         ),
         .testTarget(
             name: "PierPlayerAppTests",
-            dependencies: ["PierPlayerApp"]
+            dependencies: ["PierPlayerApp"],
+            path: "macOS/Tests/PierPlayerAppTests"
         ),
     ]
 )

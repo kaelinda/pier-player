@@ -5,6 +5,7 @@
 Build and run it in Release mode:
 
 ```bash
+cd app
 export PIER_SMB_HOST=nas.local
 export PIER_SMB_SHARE=Media
 export PIER_SMB_USER=viewer
