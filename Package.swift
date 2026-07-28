@@ -93,5 +93,9 @@ let package = Package(
             name: "PlaybackTelemetryTests",
             dependencies: ["PlaybackTelemetry"]
         ),
+        .testTarget(
+            name: "PierPlayerAppTests",
+            dependencies: ["PierPlayerApp"]
+        ),
     ]
 )
