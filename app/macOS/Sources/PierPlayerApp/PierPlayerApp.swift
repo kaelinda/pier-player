@@ -36,10 +36,12 @@ struct PierPlayerApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appModel)
+                .tint(.teal)
+                .frame(minWidth: 820, minHeight: 560)
                 .task {
                     await appModel.restore()
                 }
         }
-        .defaultSize(width: 1040, height: 680)
+        .defaultSize(width: 1120, height: 720)
     }
 }
