@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MediaSourceItem: Hashable, Codable, Sendable {
+public struct MediaSourceItem: Hashable, Codable, Sendable, Identifiable {
     public enum Kind: String, Codable, Sendable {
         case file
         case directory
@@ -11,6 +11,8 @@ public struct MediaSourceItem: Hashable, Codable, Sendable {
     public let kind: Kind
     public let size: Int64?
     public let modifiedAt: Date?
+
+    public var id: String { path }
 
     public init(
         name: String,

@@ -58,6 +58,14 @@ public actor KeychainCredentialStore: SMBCredentialStore {
     }
 
     public func load(sourceID: UUID) throws -> StoredSMBCredential? {
+        do {
+            return try performLoad(sourceID: sourceID)
+        } catch {
+            return nil
+        }
+    }
+
+    private func performLoad(sourceID: UUID) throws -> StoredSMBCredential? {
         try validateService()
         var query = baseQuery(sourceID: sourceID)
         query[kSecReturnAttributes as String] = true
@@ -68,7 +76,7 @@ public actor KeychainCredentialStore: SMBCredentialStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else {
-            throw KeychainCredentialStoreError.unexpectedStatus(status)
+            return nil
         }
         guard
             let item = result as? [String: Any],
@@ -80,17 +88,14 @@ public actor KeychainCredentialStore: SMBCredentialStore {
                 from: metadataData
             )
         else {
-            throw KeychainCredentialStoreError.corruptItem
+            return nil
         }
 
-        let credential: SMBCredential
-        do {
-            credential = try SMBCredential(
-                username: metadata.username,
-                password: password
-            )
-        } catch {
-            throw KeychainCredentialStoreError.corruptItem
+        guard let credential = try? SMBCredential(
+            username: metadata.username,
+            password: password
+        ) else {
+            return nil
         }
         return StoredSMBCredential(credential: credential, domain: metadata.domain)
     }

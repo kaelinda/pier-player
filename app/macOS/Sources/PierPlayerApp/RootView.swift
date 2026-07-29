@@ -2,7 +2,7 @@ import SMBSourceKit
 import SwiftUI
 
 struct RootView: View {
-    @StateObject private var model = AppModel()
+    @EnvironmentObject var model: AppModel
     @State private var isAddingSource = false
     @State private var selectedSourceID: UUID?
 
@@ -11,7 +11,15 @@ struct RootView: View {
             VStack(spacing: 0) {
                 List {
                     Section("Sources") {
-                        if model.sources.isEmpty {
+                        if model.isRestoring {
+                            HStack {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Restoring sources…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if model.sources.isEmpty {
                             Label("No SMB sources", systemImage: "externaldrive")
                                 .foregroundStyle(.secondary)
                         } else {
@@ -21,6 +29,18 @@ struct RootView: View {
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         selectedSourceID = source.id
+                                    }
+                                    .contextMenu {
+                                        Button(role: .destructive) {
+                                            Task {
+                                                await model.removeSource(id: source.id)
+                                                if selectedSourceID == source.id {
+                                                    selectedSourceID = nil
+                                                }
+                                            }
+                                        } label: {
+                                            Label("Remove", systemImage: "trash")
+                                        }
                                     }
                             }
                         }
@@ -48,19 +68,9 @@ struct RootView: View {
             }
             .navigationTitle("Pier Player")
         } detail: {
-            if let source = model.source(id: selectedSourceID) {
-                VStack(spacing: 0) {
-                    List(source.rootItems, id: \.path) { item in
-                        Label(
-                            item.name,
-                            systemImage: item.kind == .directory ? "folder" : "film"
-                        )
-                    }
-                    .navigationTitle(source.displayName)
-
-                    Divider()
-
-                    playbackControls
+            if let sourceID = selectedSourceID {
+                NavigationStack {
+                    SourceBrowserView(sourceID: sourceID, path: "/")
                 }
             } else {
                 VStack(spacing: 0) {

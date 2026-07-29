@@ -30,10 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct PierPlayerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var appModel = AppModel()
 
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environmentObject(appModel)
+                .task {
+                    await appModel.restore()
+                }
         }
         .defaultSize(width: 1040, height: 680)
     }
