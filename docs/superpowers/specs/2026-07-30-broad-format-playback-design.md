@@ -1,7 +1,9 @@
 # Broad Format Playback Design
 
 **Date:** 2026-07-30
-**Status:** Design approved; written specification pending review
+**Status:** macOS implementation complete for the representative format matrix;
+automated and short local Release verification complete; extended real-media and
+SMB endurance validation remains open
 
 ## Purpose
 
@@ -23,6 +25,38 @@ requires hardware-only H.264/HEVC and excludes subtitles, software video decode,
 selectable tracks, and SMB AVIO, this design deliberately includes those
 capabilities for the broad-format macOS milestone. The original lifetime,
 bounded-resource, timing, telemetry, and licensing requirements remain in force.
+
+## Implementation Evidence
+
+Evidence recorded on 2026-07-30 establishes the following:
+
+- The app no longer aggregates SMB files into `Data` or hands temporary files to
+  `AVPlayer`. It opens one random-access media handle and passes it through the
+  bounded cache and bundled FFmpeg custom AVIO pipeline.
+- The pinned FFmpeg 8.1.2 framework reports LGPL 2.1-or-later configuration,
+  passes forbidden-flag checks, and contains a universal macOS `arm64` and
+  `x86_64` slice.
+- Generated MKV H.264/AAC, MP4 H.264/AAC, WebM VP9/Opus, AVI MPEG-4/MP3, and
+  MPEG-TS MPEG-2/AC-3 fixtures probe, seek, decode audio and video, maintain
+  monotonic timestamps, and reach clean EOF through the streaming path.
+- On the reference Apple M1 Pro Mac, short Release probes selected VideoToolbox
+  for H.264 and VP9 and selected software decode for MPEG-4 Part 2 and MPEG-2.
+- The macOS UI hosts `AVSampleBufferDisplayLayer`, exposes playback, seek,
+  volume, mute, full-screen, audio-track, and subtitle controls, and passes
+  offscreen layout checks at 760 by 520 and 1180 by 760 points.
+- The repository gate passes 94 tests, Debug and Release builds, framework and
+  fixture verification, two Release probes, and whitespace checks. The Release
+  executable resolves PierFFmpeg through `@rpath` with `@loader_path` available.
+
+The reference measurements and their limits are recorded in
+`app/docs/benchmarks/broad-format-reference.json`. The evidence does not yet
+establish HEVC, AV1, VP8, FLV, VOB, ASF, WMV, or every other enabled combination
+with dedicated fixtures. It also does not establish two-hour stability, remote
+SMB throughput, drift, or recovery behavior. The coordinator has bounded retry
+configuration but still needs a reconnectable source factory before interrupted
+SMB handles can be reopened. External subtitle parsing and same-basename
+discovery are tested independently; wiring sibling discovery into the active
+player session remains follow-up work.
 
 ## Product Scope
 
