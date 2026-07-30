@@ -116,6 +116,7 @@ import Testing
 
 @Test func playbackTimeLabelsUseHoursOnlyWhenNeeded() {
     #expect(PlaybackControlCopy.timeLabel(.nan) == "0:00")
+    #expect(PlaybackControlCopy.timeLabel(.greatestFiniteMagnitude) == "0:00")
     #expect(PlaybackControlCopy.timeLabel(-1) == "0:00")
     #expect(PlaybackControlCopy.timeLabel(65) == "1:05")
     #expect(PlaybackControlCopy.timeLabel(3_661) == "1:01:01")
