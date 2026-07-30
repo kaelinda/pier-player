@@ -16,20 +16,129 @@ import Testing
     #expect(SidebarDestination.library.reconciled(with: [existingID]) == .library)
 }
 
+@Test func mediaLibraryStatePrioritizesRestorationAndPreservesExistingContent() {
+    let restoringEmpty = MediaLibraryContentState.resolve(
+        sourceCount: 1,
+        itemCount: 0,
+        filteredItemCount: 0,
+        hasQuery: false,
+        isRestoring: true,
+        isScanning: true
+    )
+    #expect(restoringEmpty.mode == .restoring)
+    #expect(restoringEmpty.compactActivity == nil)
+
+    let restoringContent = MediaLibraryContentState.resolve(
+        sourceCount: 2,
+        itemCount: 8,
+        filteredItemCount: 8,
+        hasQuery: false,
+        isRestoring: true,
+        isScanning: true
+    )
+    #expect(
+        restoringContent.mode == .content([
+            .recentlyAdded,
+            .allVideos,
+            .fileSources,
+        ])
+    )
+    #expect(restoringContent.compactActivity == .restoring)
+    #expect(restoringContent.compactActivity?.accessibilityLabel == "Restoring Sources")
+
+    let refreshingContent = MediaLibraryContentState.resolve(
+        sourceCount: 2,
+        itemCount: 8,
+        filteredItemCount: 8,
+        hasQuery: false,
+        isRestoring: false,
+        isScanning: true
+    )
+    #expect(refreshingContent.mode == restoringContent.mode)
+    #expect(refreshingContent.compactActivity == .refreshing)
+    #expect(refreshingContent.compactActivity?.accessibilityLabel == "Refreshing Library")
+
+    let scanningEmpty = MediaLibraryContentState.resolve(
+        sourceCount: 2,
+        itemCount: 0,
+        filteredItemCount: 0,
+        hasQuery: false,
+        isRestoring: false,
+        isScanning: true
+    )
+    #expect(scanningEmpty.mode == .scanning)
+}
+
+@Test func mediaLibrarySearchCompositionUsesOnlyOneResultsShelf() {
+    let matching = MediaLibraryContentState.resolve(
+        sourceCount: 2,
+        itemCount: 8,
+        filteredItemCount: 3,
+        hasQuery: true,
+        isRestoring: false,
+        isScanning: false
+    )
+    #expect(matching.mode == .content([.searchResults]))
+
+    let empty = MediaLibraryContentState.resolve(
+        sourceCount: 2,
+        itemCount: 8,
+        filteredItemCount: 0,
+        hasQuery: true,
+        isRestoring: false,
+        isScanning: false
+    )
+    #expect(empty.mode == .content([.noSearchResults, .fileSources]))
+}
+
+@Test func noVideoStateAcknowledgesBoundedDiscovery() {
+    #expect(
+        MediaLibraryContentCopy.noVideosDescription
+            == "No supported videos were found within the scanned folders."
+    )
+}
+
 @MainActor
 @Test func rootViewRendersAtMinimumWindowSize() throws {
     let size = CGSize(width: 820, height: 560)
-    let image = try render(
+    let image = try renderInWindow(
         RootView()
             .environmentObject(AppModel())
             .tint(.teal)
+            .preferredColorScheme(.dark)
             .frame(width: size.width, height: size.height),
         at: size
     )
 
     #expect(image.size == size)
     #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 8)
+    #expect(darkPixelFraction(in: image) > 0.6)
     try writeSnapshotIfRequested(image, name: "root-view")
+}
+
+@MainActor
+@Test func rootSidebarRendersSelectedLibraryAndSourceStatus() throws {
+    let size = CGSize(width: 260, height: 560)
+    let image = try renderInWindow(
+        RootSidebarContent(
+            sources: [],
+            isRestoring: true,
+            selection: .constant(.library),
+            addSource: {},
+            removeSource: { _ in }
+        )
+        .preferredColorScheme(.dark)
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 8)
+    #expect(darkPixelFraction(in: image) > 0.6)
+    try writeSnapshotIfRequested(image, name: "root-sidebar")
 }
 
 @MainActor
@@ -61,7 +170,8 @@ func populatedMediaLibraryRenders(
         MediaLibraryContentView(
             snapshot: fixture.snapshot,
             sourceSummaries: fixture.sources,
-            isLoading: false,
+            isRestoring: false,
+            isScanning: true,
             query: "",
             play: { _ in },
             openSource: { _ in },
@@ -92,6 +202,85 @@ private func render<Content: View>(_ content: Content, at size: CGSize) throws -
     let image = NSImage(size: size)
     image.addRepresentation(representation)
     return image
+}
+
+@MainActor
+private func renderInWindow<Content: View>(
+    _ content: Content,
+    at size: CGSize
+) throws -> NSImage {
+    let hostingView = NSHostingView(rootView: content)
+    hostingView.frame = NSRect(origin: .zero, size: size)
+
+    let window = NSWindow(
+        contentRect: NSRect(origin: .zero, size: size),
+        styleMask: [.borderless],
+        backing: .buffered,
+        defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.contentView = hostingView
+    window.orderFrontRegardless()
+    defer {
+        window.orderOut(nil)
+        window.contentView = nil
+    }
+
+    RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+    hostingView.layoutSubtreeIfNeeded()
+
+    let representation = try #require(
+        hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)
+    )
+    hostingView.cacheDisplay(in: hostingView.bounds, to: representation)
+
+    let image = NSImage(size: size)
+    image.addRepresentation(representation)
+    return image
+}
+
+private func distinctSampledColorCount(in image: NSImage) -> Int {
+    guard let data = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: data) else {
+        return 0
+    }
+
+    var colors: Set<UInt32> = []
+    for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8) {
+        for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+            guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                continue
+            }
+            let red = UInt32((color.redComponent * 15).rounded())
+            let green = UInt32((color.greenComponent * 15).rounded())
+            let blue = UInt32((color.blueComponent * 15).rounded())
+            colors.insert((red << 8) | (green << 4) | blue)
+        }
+    }
+    return colors.count
+}
+
+private func darkPixelFraction(in image: NSImage) -> Double {
+    guard let data = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: data) else {
+        return 0
+    }
+
+    var darkPixels = 0
+    var sampledPixels = 0
+    for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8) {
+        for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+            guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                continue
+            }
+            let luminance = 0.2126 * color.redComponent
+                + 0.7152 * color.greenComponent
+                + 0.0722 * color.blueComponent
+            darkPixels += luminance < 0.5 ? 1 : 0
+            sampledPixels += 1
+        }
+    }
+    return sampledPixels == 0 ? 0 : Double(darkPixels) / Double(sampledPixels)
 }
 
 private func writeSnapshotIfRequested(_ image: NSImage, name: String) throws {

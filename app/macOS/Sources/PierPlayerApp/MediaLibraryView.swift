@@ -1,6 +1,94 @@
 import AppKit
 import SwiftUI
 
+enum MediaLibrarySectionKind: Hashable {
+    case recentlyAdded
+    case allVideos
+    case fileSources
+    case searchResults
+    case noSearchResults
+    case noVideos
+}
+
+enum MediaLibraryContentCopy {
+    static let noVideosDescription =
+        "No supported videos were found within the scanned folders."
+}
+
+enum MediaLibraryContentMode: Equatable {
+    case restoring
+    case scanning
+    case noSources
+    case content([MediaLibrarySectionKind])
+}
+
+enum MediaLibraryCompactActivity: Equatable {
+    case restoring
+    case refreshing
+
+    var accessibilityLabel: String {
+        switch self {
+        case .restoring:
+            return "Restoring Sources"
+        case .refreshing:
+            return "Refreshing Library"
+        }
+    }
+}
+
+struct MediaLibraryContentState: Equatable {
+    let mode: MediaLibraryContentMode
+    let compactActivity: MediaLibraryCompactActivity?
+
+    static func resolve(
+        sourceCount: Int,
+        itemCount: Int,
+        filteredItemCount: Int,
+        hasQuery: Bool,
+        isRestoring: Bool,
+        isScanning: Bool
+    ) -> MediaLibraryContentState {
+        guard itemCount > 0 else {
+            if isRestoring {
+                return MediaLibraryContentState(mode: .restoring, compactActivity: nil)
+            }
+            if sourceCount == 0 {
+                return MediaLibraryContentState(mode: .noSources, compactActivity: nil)
+            }
+            if isScanning {
+                return MediaLibraryContentState(mode: .scanning, compactActivity: nil)
+            }
+            let sections: [MediaLibrarySectionKind] = hasQuery
+                ? [.noSearchResults, .fileSources]
+                : [.noVideos, .fileSources]
+            return MediaLibraryContentState(mode: .content(sections), compactActivity: nil)
+        }
+
+        let sections: [MediaLibrarySectionKind]
+        if hasQuery {
+            sections = filteredItemCount > 0
+                ? [.searchResults]
+                : [.noSearchResults, .fileSources]
+        } else {
+            sections = [.recentlyAdded, .allVideos, .fileSources]
+        }
+
+        let compactActivity: MediaLibraryCompactActivity?
+        if isRestoring {
+            compactActivity = .restoring
+        } else if isScanning {
+            compactActivity = .refreshing
+        } else {
+            compactActivity = nil
+        }
+
+        return MediaLibraryContentState(
+            mode: .content(sections),
+            compactActivity: compactActivity
+        )
+    }
+}
+
 struct MediaLibraryView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var destination: SidebarDestination
@@ -15,7 +103,8 @@ struct MediaLibraryView: View {
         MediaLibraryContentView(
             snapshot: viewModel.snapshot,
             sourceSummaries: model.mediaLibrarySourceSummaries,
-            isLoading: viewModel.isLoading || model.isRestoring,
+            isRestoring: model.isRestoring,
+            isScanning: viewModel.isLoading,
             query: query,
             play: { selectedMediaItem = $0 },
             openSource: { destination = .source($0) },
@@ -61,7 +150,8 @@ struct MediaLibraryView: View {
 struct MediaLibraryContentView: View {
     let snapshot: MediaLibrarySnapshot
     let sourceSummaries: [MediaLibrarySourceSummary]
-    let isLoading: Bool
+    let isRestoring: Bool
+    let isScanning: Bool
     let query: String
     let play: (MediaLibraryItem) -> Void
     let openSource: (UUID) -> Void
@@ -93,6 +183,17 @@ struct MediaLibraryContentView: View {
         }
     }
 
+    private var contentState: MediaLibraryContentState {
+        MediaLibraryContentState.resolve(
+            sourceCount: sourceSummaries.count,
+            itemCount: snapshot.items.count,
+            filteredItemCount: filteredItems.count,
+            hasQuery: !trimmedQuery.isEmpty,
+            isRestoring: isRestoring,
+            isScanning: isScanning
+        )
+    }
+
     var body: some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 24) {
@@ -118,10 +219,10 @@ struct MediaLibraryContentView: View {
 
             Spacer()
 
-            if isLoading, !snapshot.items.isEmpty {
+            if let compactActivity = contentState.compactActivity {
                 ProgressView()
                     .controlSize(.small)
-                    .accessibilityLabel("Refreshing Library")
+                    .accessibilityLabel(compactActivity.accessibilityLabel)
             }
         }
         .frame(minHeight: 20)
@@ -137,31 +238,35 @@ struct MediaLibraryContentView: View {
 
     @ViewBuilder
     private var content: some View {
-        if sourceSummaries.isEmpty {
-            if isLoading {
-                progressState(title: "Restoring Sources")
-            } else {
-                noSourcesState
+        switch contentState.mode {
+        case .restoring:
+            progressState(title: "Restoring Sources")
+        case .scanning:
+            progressState(title: "Scanning Library")
+        case .noSources:
+            noSourcesState
+        case let .content(sections):
+            ForEach(sections, id: \.self) { section in
+                contentSection(section)
             }
-        } else if trimmedQuery.isEmpty {
-            if snapshot.items.isEmpty {
-                if isLoading {
-                    progressState(title: "Scanning Library")
-                } else {
-                    noVideosState
-                    sourcesSection
-                }
-            } else {
-                recentSection
-                allVideosSection(items: allItems, title: "All Videos")
-                sourcesSection
-            }
-        } else if filteredItems.isEmpty {
-            noResultsState
+        }
+    }
+
+    @ViewBuilder
+    private func contentSection(_ section: MediaLibrarySectionKind) -> some View {
+        switch section {
+        case .recentlyAdded:
+            recentSection
+        case .allVideos:
+            allVideosSection(items: allItems, title: "All Videos")
+        case .fileSources:
             sourcesSection
-        } else {
+        case .searchResults:
             allVideosSection(items: filteredItems, title: "Search Results")
-            sourcesSection
+        case .noSearchResults:
+            noResultsState
+        case .noVideos:
+            noVideosState
         }
     }
 
@@ -243,7 +348,7 @@ struct MediaLibraryContentView: View {
         ContentUnavailableView {
             Label("No Supported Videos", systemImage: "film")
         } description: {
-            Text("No MKV, MP4, M4V, or MOV files were found.")
+            Text(MediaLibraryContentCopy.noVideosDescription)
         }
         .frame(maxWidth: .infinity, minHeight: 220)
     }

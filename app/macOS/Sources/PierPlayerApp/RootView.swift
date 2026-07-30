@@ -37,36 +37,13 @@ struct RootView: View {
     }
 
     private var sourceSidebar: some View {
-        List(selection: $selectedDestination) {
-            Section("Library") {
-                Label("Media Library", systemImage: "rectangle.stack.fill")
-                    .tag(SidebarDestination.library)
-            }
-
-            Section("File Sources") {
-                if model.isRestoring {
-                    restoringRow
-                } else if model.sources.isEmpty {
-                    emptySourcesRow
-                } else {
-                    ForEach(model.sources) { source in
-                        SourceSidebarRow(source: source)
-                            .tag(SidebarDestination.source(source.id))
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    removeSource(source.id)
-                                } label: {
-                                    Label("Remove Source", systemImage: "trash")
-                                }
-                            }
-                    }
-                }
-            }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            sidebarFooter
-        }
+        RootSidebarContent(
+            sources: model.sources,
+            isRestoring: model.isRestoring,
+            selection: $selectedDestination,
+            addSource: { isAddingSource = true },
+            removeSource: removeSource
+        )
     }
 
     @ViewBuilder
@@ -101,6 +78,54 @@ struct RootView: View {
         )
     }
 
+    private func removeSource(_ id: UUID) {
+        Task {
+            await model.removeSource(id: id)
+        }
+    }
+}
+
+struct RootSidebarContent: View {
+    let sources: [AppModel.ConnectedSource]
+    let isRestoring: Bool
+    @Binding var selection: SidebarDestination?
+    let addSource: () -> Void
+    let removeSource: (UUID) -> Void
+
+    var body: some View {
+        List(selection: $selection) {
+            Section("Library") {
+                Label("Media Library", systemImage: "rectangle.stack.fill")
+                    .tag(SidebarDestination.library)
+            }
+
+            Section("File Sources") {
+                if isRestoring {
+                    restoringRow
+                } else if sources.isEmpty {
+                    emptySourcesRow
+                } else {
+                    ForEach(sources) { source in
+                        SourceSidebarRow(source: source)
+                            .tag(SidebarDestination.source(source.id))
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    removeSource(source.id)
+                                } label: {
+                                    Label("Remove Source", systemImage: "trash")
+                                }
+                            }
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            sidebarFooter
+        }
+        .accessibilityLabel("Pier Player Sidebar")
+    }
+
     private var restoringRow: some View {
         HStack(spacing: 10) {
             ProgressView()
@@ -126,7 +151,7 @@ struct RootView: View {
     private var sidebarFooter: some View {
         HStack(spacing: 9) {
             Circle()
-                .fill(model.sources.isEmpty ? Color.secondary : Color.green)
+                .fill(sources.isEmpty ? Color.secondary : Color.green)
                 .frame(width: 7, height: 7)
 
             Text(sourceCountLabel)
@@ -136,7 +161,7 @@ struct RootView: View {
             Spacer()
 
             Button {
-                isAddingSource = true
+                addSource()
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 24, height: 24)
@@ -155,16 +180,10 @@ struct RootView: View {
     }
 
     private var sourceCountLabel: String {
-        switch model.sources.count {
+        switch sources.count {
         case 0: "Offline"
         case 1: "1 Source"
-        default: "\(model.sources.count) Sources"
-        }
-    }
-
-    private func removeSource(_ id: UUID) {
-        Task {
-            await model.removeSource(id: id)
+        default: "\(sources.count) Sources"
         }
     }
 }
