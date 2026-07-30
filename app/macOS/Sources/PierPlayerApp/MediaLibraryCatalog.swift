@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import MediaSourceKit
 
@@ -42,6 +43,19 @@ struct MediaLibraryScanFailure: Identifiable, Equatable, Sendable {
 struct MediaLibraryScanResult: Equatable, Sendable {
     let items: [MediaLibraryItem]
     let failure: MediaLibraryScanFailure?
+}
+
+struct MediaLibrarySnapshot: Equatable, Sendable {
+    var items: [MediaLibraryItem]
+    var failures: [MediaLibraryScanFailure]
+
+    init(
+        items: [MediaLibraryItem] = [],
+        failures: [MediaLibraryScanFailure] = []
+    ) {
+        self.items = items
+        self.failures = failures
+    }
 }
 
 struct MediaLibraryScanner: Sendable {
@@ -112,5 +126,74 @@ struct MediaLibraryScanner: Sendable {
         }
 
         return MediaLibraryScanResult(items: items, failure: nil)
+    }
+}
+
+@MainActor
+final class MediaLibraryViewModel: ObservableObject {
+    @Published private(set) var snapshot: MediaLibrarySnapshot
+    @Published private(set) var isLoading = false
+
+    private let scanner: MediaLibraryScanner
+    private var reloadGeneration = 0
+
+    init(
+        scanner: MediaLibraryScanner = MediaLibraryScanner(),
+        initialSnapshot: MediaLibrarySnapshot = MediaLibrarySnapshot()
+    ) {
+        self.scanner = scanner
+        snapshot = initialSnapshot
+    }
+
+    func reload(sources: [MediaLibrarySource]) async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        snapshot = MediaLibrarySnapshot()
+        isLoading = true
+
+        defer {
+            if reloadGeneration == generation {
+                isLoading = false
+            }
+        }
+
+        guard !sources.isEmpty, !Task.isCancelled else {
+            return
+        }
+
+        let scanner = scanner
+        await withTaskGroup(of: MediaLibraryScanResult?.self) { group in
+            var nextSourceIndex = 0
+
+            while nextSourceIndex < min(2, sources.count) {
+                let source = sources[nextSourceIndex]
+                nextSourceIndex += 1
+                group.addTask {
+                    try? await scanner.scan(source: source)
+                }
+            }
+
+            while let result = await group.next() {
+                guard !Task.isCancelled, reloadGeneration == generation else {
+                    group.cancelAll()
+                    return
+                }
+
+                if let result {
+                    snapshot.items.append(contentsOf: result.items)
+                    if let failure = result.failure {
+                        snapshot.failures.append(failure)
+                    }
+                }
+
+                if nextSourceIndex < sources.count {
+                    let source = sources[nextSourceIndex]
+                    nextSourceIndex += 1
+                    group.addTask {
+                        try? await scanner.scan(source: source)
+                    }
+                }
+            }
+        }
     }
 }
