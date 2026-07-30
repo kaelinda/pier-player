@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-07-30T01:56:40Z",
+  "scope": "short generated local fixtures through CachedMediaReader and bundled FFmpeg custom AVIO",
+  "referenceMachine": {
+    "architecture": "arm64",
+    "cpu": "Apple M1 Pro",
+    "hardwareModel": "MacBookPro18,3",
+    "macOSBuild": "25F84",
+    "macOSVersion": "26.5.2",
+    "swiftVersion": "6.3"
+  },
+  "runtime": {
+    "ffmpegVersion": "8.1.2",
+    "license": "LGPL version 2.1 or later"
+  },
+  "measurements": [
+    {
+      "fixture": "video-h264-aac.mkv",
+      "container": "matroska,webm",
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "decoderMode": "videoToolbox",
+      "hardwareAttempted": true,
+      "softwareFallbackCount": 0,
+      "seekSeconds": 1.0,
+      "seekLatencyMilliseconds": 0.211042,
+      "videoSamples": 24,
+      "audioSamples": 44,
+      "videoTimestampsMonotonic": true,
+      "audioTimestampsMonotonic": true,
+      "videoPeakBytes": 89344,
+      "audioPeakBytes": 8192
+    },
+    {
+      "fixture": "video-vp9-opus.webm",
+      "container": "matroska,webm",
+      "videoCodec": "vp9",
+      "audioCodec": "opus",
+      "decoderMode": "videoToolbox",
+      "hardwareAttempted": true,
+      "softwareFallbackCount": 0,
+      "videoSamples": 24,
+      "audioSamples": 49,
+      "videoTimestampsMonotonic": true,
+      "audioTimestampsMonotonic": true,
+      "videoPeakBytes": 89344,
+      "audioPeakBytes": 7680
+    },
+    {
+      "fixture": "video-mpeg4-mp3.avi",
+      "container": "avi",
+      "videoCodec": "mpeg4",
+      "audioCodec": "mp3",
+      "decoderMode": "software",
+      "hardwareAttempted": false,
+      "softwareFallbackCount": 0,
+      "videoSamples": 24,
+      "audioSamples": 41,
+      "videoTimestampsMonotonic": true,
+      "audioTimestampsMonotonic": true,
+      "videoPeakBytes": 230400,
+      "audioPeakBytes": 9216
+    },
+    {
+      "fixture": "video-mpeg2-ac3.ts",
+      "container": "mpegts",
+      "videoCodec": "mpeg2video",
+      "audioCodec": "ac3",
+      "decoderMode": "software",
+      "hardwareAttempted": false,
+      "softwareFallbackCount": 0,
+      "videoSamples": 24,
+      "audioSamples": 29,
+      "videoTimestampsMonotonic": true,
+      "audioTimestampsMonotonic": true,
+      "videoPeakBytes": 230400,
+      "audioPeakBytes": 12288
+    }
+  ],
+  "compatibilityGate": {
+    "formats": [
+      "MKV H.264/AAC",
+      "MP4 H.264/AAC",
+      "WebM VP9/Opus",
+      "AVI MPEG-4/MP3",
+      "TS MPEG-2/AC-3"
+    ],
+    "cleanEOF": true,
+    "seekCompletedForEveryFormat": true
+  },
+  "limitations": [
+    "The 24-frame Release probes intentionally stop before EOF; clean EOF is verified by FormatCompatibilityTests.",
+    "These two-second local fixtures do not establish display smoothness, long-run memory stability, network throughput, or SMB recovery behavior.",
+    "Queue peaks represent the probe's one-sample decode handoff, not the PlaybackCoordinator production watermarks."
+  ]
+}

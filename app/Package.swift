@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "SubtitleKit", targets: ["SubtitleKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
+        .executable(name: "PlaybackProbe", targets: ["PlaybackProbe"]),
     ],
     targets: [
         .binaryTarget(
@@ -121,6 +122,14 @@ let package = Package(
                 "StreamIOKit",
             ],
             path: "Tools/SMBProbe"
+        ),
+        .executableTarget(
+            name: "PlaybackProbe",
+            dependencies: [
+                "FFmpegKit",
+                "MediaSourceKit",
+            ],
+            path: "Tools/PlaybackProbe"
         ),
         .testTarget(
             name: "MediaSourceKitTests",

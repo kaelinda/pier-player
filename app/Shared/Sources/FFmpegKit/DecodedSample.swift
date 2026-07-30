@@ -1,7 +1,7 @@
 import CoreVideo
 import Foundation
 
-public enum VideoDecoderMode: String, Equatable, Sendable {
+public enum VideoDecoderMode: String, Codable, Equatable, Sendable {
     case none
     case videoToolbox
     case software
