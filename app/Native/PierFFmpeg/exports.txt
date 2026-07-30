@@ -6,6 +6,9 @@ _ppff_session_media_info
 _ppff_session_open
 _ppff_session_prepare_decoders
 _ppff_session_read_next
+_ppff_session_seek
+_ppff_session_select_audio
+_ppff_session_select_subtitle
 _ppff_session_stream_count
 _ppff_session_stream_info
 _ppff_session_video_decoder_status

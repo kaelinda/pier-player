@@ -47,6 +47,7 @@ int ppff_session_prepare_decoders(
 
     session->last_video_pts_us = INT64_MIN;
     session->next_audio_pts_us = AV_NOPTS_VALUE;
+    session->seek_target_us = AV_NOPTS_VALUE;
     int result = ppff_video_decoder_open(session, configuration, error);
     if (result < 0) {
         ppff_decode_destroy(session);
@@ -58,6 +59,113 @@ int ppff_session_prepare_decoders(
         return result;
     }
     session->decode_prepared = 1;
+    return 0;
+}
+
+static void ppff_reset_after_seek(PPFFSession *session, int64_t target_us) {
+    if (session->video_decoder != NULL) {
+        avcodec_flush_buffers(session->video_decoder);
+    }
+    if (session->audio_decoder != NULL) {
+        avcodec_flush_buffers(session->audio_decoder);
+    }
+    if (session->resample_context != NULL) {
+        swr_close(session->resample_context);
+        swr_init(session->resample_context);
+    }
+    av_packet_unref(session->packet);
+    av_frame_unref(session->video_frame);
+    av_frame_unref(session->audio_frame);
+    session->demux_eof = 0;
+    session->video_drain_sent = 0;
+    session->audio_drain_sent = 0;
+    session->video_drained = 0;
+    session->audio_drained = 0;
+    session->last_video_pts_us = INT64_MIN;
+    session->next_audio_pts_us = AV_NOPTS_VALUE;
+    session->seek_target_us = target_us;
+    session->seek_in_progress = 1;
+    session->video_seek_ready = session->video_decoder == NULL;
+    session->audio_seek_ready = session->audio_decoder == NULL;
+}
+
+int ppff_session_seek(
+    PPFFSession *session,
+    int64_t presentation_time_us,
+    PPFFError *error
+) {
+    ppff_error_clear(error);
+    if (session == NULL || !session->decode_prepared || presentation_time_us < 0) {
+        ppff_error_set(error, AVERROR(EINVAL), "seek media");
+        return AVERROR(EINVAL);
+    }
+    int result = avformat_seek_file(
+        session->format_context,
+        -1,
+        INT64_MIN,
+        presentation_time_us,
+        presentation_time_us,
+        AVSEEK_FLAG_BACKWARD
+    );
+    if (result < 0) {
+        ppff_error_set(error, result, "seek media");
+        return result;
+    }
+    ppff_reset_after_seek(session, presentation_time_us);
+    return 0;
+}
+
+int ppff_session_select_audio(
+    PPFFSession *session,
+    int stream_index,
+    int64_t presentation_time_us,
+    PPFFError *error
+) {
+    ppff_error_clear(error);
+    if (session == NULL || !session->decode_prepared || stream_index < 0 ||
+        stream_index >= (int)session->format_context->nb_streams ||
+        session->format_context->streams[stream_index]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
+        ppff_error_set(error, AVERROR(EINVAL), "select audio stream");
+        return AVERROR(EINVAL);
+    }
+
+    if (stream_index != session->default_audio_stream) {
+        int previous_stream = session->default_audio_stream;
+        avcodec_free_context(&session->audio_decoder);
+        swr_free(&session->resample_context);
+        session->default_audio_stream = stream_index;
+
+        int result = ppff_audio_decoder_open(session, error);
+        if (result < 0) {
+            PPFFError selection_error = error != NULL ? *error : (PPFFError){0};
+            avcodec_free_context(&session->audio_decoder);
+            swr_free(&session->resample_context);
+            session->default_audio_stream = previous_stream;
+            PPFFError recovery_error;
+            ppff_audio_decoder_open(session, &recovery_error);
+            if (error != NULL) {
+                *error = selection_error;
+            }
+            return result;
+        }
+    }
+    return ppff_session_seek(session, presentation_time_us, error);
+}
+
+int ppff_session_select_subtitle(
+    PPFFSession *session,
+    int stream_index,
+    PPFFError *error
+) {
+    ppff_error_clear(error);
+    if (session == NULL || stream_index < -1 ||
+        stream_index >= (int)session->format_context->nb_streams ||
+        (stream_index >= 0 &&
+         session->format_context->streams[stream_index]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE)) {
+        ppff_error_set(error, AVERROR(EINVAL), "select subtitle stream");
+        return AVERROR(EINVAL);
+    }
+    session->default_subtitle_stream = stream_index;
     return 0;
 }
 
@@ -115,6 +223,15 @@ int ppff_session_read_next(
     while (1) {
         int video_result = ppff_video_receive(session, sample, error);
         if (video_result > 0) {
+            if (session->seek_in_progress &&
+                sample->presentation_time_us < session->seek_target_us) {
+                ppff_sample_release(sample);
+                continue;
+            }
+            session->video_seek_ready = 1;
+            if (session->video_seek_ready && session->audio_seek_ready) {
+                session->seek_in_progress = 0;
+            }
             return video_result;
         }
         if (video_result < 0 &&
@@ -125,6 +242,15 @@ int ppff_session_read_next(
 
         int audio_result = ppff_audio_receive(session, sample, error);
         if (audio_result > 0) {
+            if (session->seek_in_progress &&
+                sample->presentation_time_us < session->seek_target_us) {
+                ppff_sample_release(sample);
+                continue;
+            }
+            session->audio_seek_ready = 1;
+            if (session->video_seek_ready && session->audio_seek_ready) {
+                session->seek_in_progress = 0;
+            }
             return audio_result;
         }
         if (audio_result < 0 &&

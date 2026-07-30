@@ -7,6 +7,11 @@ public final class FFmpegSession: @unchecked Sendable {
     private var nativeSession: OpaquePointer?
     private var decodersPrepared = false
     private var isCancelled = false
+    private var generation: UInt64 = 0
+
+    public var currentGeneration: UInt64 {
+        lock.withLock { generation }
+    }
 
     public convenience init(
         data: Data,
@@ -179,7 +184,8 @@ public final class FFmpegSession: @unchecked Sendable {
                         pixelBuffer: retainedPixelBuffer,
                         presentationTime: presentationTime,
                         duration: duration,
-                        streamIndex: Int(nativeSample.stream_index)
+                        streamIndex: Int(nativeSample.stream_index),
+                        generation: generation
                     )
                 )
             case 2:
@@ -198,12 +204,82 @@ public final class FFmpegSession: @unchecked Sendable {
                         sampleCount: Int(nativeSample.audio_sample_count),
                         sampleRate: Int(nativeSample.audio_sample_rate),
                         channelCount: Int(nativeSample.audio_channel_count),
-                        streamIndex: Int(nativeSample.stream_index)
+                        streamIndex: Int(nativeSample.stream_index),
+                        generation: generation
                     )
                 )
             default:
                 throw FFmpegError.native(code: -1, message: "unknown decoded sample kind")
             }
+        }
+    }
+
+    @discardableResult
+    public func seek(to presentationTime: TimeInterval) throws -> UInt64 {
+        try lock.withLock {
+            guard let nativeSession else { throw FFmpegError.sessionClosed }
+            guard decodersPrepared else { throw FFmpegError.decodersNotPrepared }
+            guard !isCancelled else { throw FFmpegError.cancelled }
+            guard presentationTime.isFinite, presentationTime >= 0,
+                  presentationTime <= TimeInterval(Int64.max) / 1_000_000 else {
+                throw FFmpegError.native(code: -22, message: "invalid seek time")
+            }
+
+            var nativeError = PPFFError()
+            let result = ppff_session_seek(
+                nativeSession,
+                Int64(presentationTime * 1_000_000),
+                &nativeError
+            )
+            guard result >= 0 else { throw Self.error(from: &nativeError) }
+            generation &+= 1
+            return generation
+        }
+    }
+
+    @discardableResult
+    public func selectAudioTrack(
+        index: Int,
+        at presentationTime: TimeInterval
+    ) throws -> UInt64 {
+        try lock.withLock {
+            guard let nativeSession else { throw FFmpegError.sessionClosed }
+            guard decodersPrepared else { throw FFmpegError.decodersNotPrepared }
+            guard !isCancelled else { throw FFmpegError.cancelled }
+            guard presentationTime.isFinite, presentationTime >= 0,
+                  presentationTime <= TimeInterval(Int64.max) / 1_000_000,
+                  index >= 0, index <= Int(Int32.max) else {
+                throw FFmpegError.native(code: -22, message: "invalid audio selection")
+            }
+
+            var nativeError = PPFFError()
+            let result = ppff_session_select_audio(
+                nativeSession,
+                Int32(index),
+                Int64(presentationTime * 1_000_000),
+                &nativeError
+            )
+            guard result >= 0 else { throw Self.error(from: &nativeError) }
+            generation &+= 1
+            return generation
+        }
+    }
+
+    public func selectSubtitleTrack(index: Int?) throws {
+        try lock.withLock {
+            guard let nativeSession else { throw FFmpegError.sessionClosed }
+            guard decodersPrepared else { throw FFmpegError.decodersNotPrepared }
+            let rawIndex = index ?? -1
+            guard rawIndex >= -1, rawIndex <= Int(Int32.max) else {
+                throw FFmpegError.native(code: -22, message: "invalid subtitle selection")
+            }
+            var nativeError = PPFFError()
+            let result = ppff_session_select_subtitle(
+                nativeSession,
+                Int32(rawIndex),
+                &nativeError
+            )
+            guard result >= 0 else { throw Self.error(from: &nativeError) }
         }
     }
 

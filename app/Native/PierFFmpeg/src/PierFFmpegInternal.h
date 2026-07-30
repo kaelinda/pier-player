@@ -36,6 +36,10 @@ struct PPFFSession {
     int audio_drained;
     int64_t last_video_pts_us;
     int64_t next_audio_pts_us;
+    int64_t seek_target_us;
+    int seek_in_progress;
+    int video_seek_ready;
+    int audio_seek_ready;
 };
 
 void ppff_error_clear(PPFFError *error);

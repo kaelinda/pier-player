@@ -144,6 +144,22 @@ PPFF_API int ppff_session_read_next(
     PPFFSample *sample,
     PPFFError *error
 );
+PPFF_API int ppff_session_seek(
+    PPFFSession *session,
+    int64_t presentation_time_us,
+    PPFFError *error
+);
+PPFF_API int ppff_session_select_audio(
+    PPFFSession *session,
+    int stream_index,
+    int64_t presentation_time_us,
+    PPFFError *error
+);
+PPFF_API int ppff_session_select_subtitle(
+    PPFFSession *session,
+    int stream_index,
+    PPFFError *error
+);
 PPFF_API void ppff_sample_release(PPFFSample *sample);
 PPFF_API void ppff_session_close(PPFFSession **session);
 

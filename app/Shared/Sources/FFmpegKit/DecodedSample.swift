@@ -43,17 +43,20 @@ public struct DecodedVideoSample: @unchecked Sendable {
     public let presentationTime: TimeInterval
     public let duration: TimeInterval
     public let streamIndex: Int
+    public let generation: UInt64
 
     public init(
         pixelBuffer: CVPixelBuffer,
         presentationTime: TimeInterval,
         duration: TimeInterval,
-        streamIndex: Int
+        streamIndex: Int,
+        generation: UInt64 = 0
     ) {
         self.pixelBuffer = pixelBuffer
         self.presentationTime = presentationTime
         self.duration = duration
         self.streamIndex = streamIndex
+        self.generation = generation
     }
 }
 
@@ -65,6 +68,7 @@ public struct DecodedAudioSample: Equatable, Sendable {
     public let sampleRate: Int
     public let channelCount: Int
     public let streamIndex: Int
+    public let generation: UInt64
 
     public init(
         data: Data,
@@ -73,7 +77,8 @@ public struct DecodedAudioSample: Equatable, Sendable {
         sampleCount: Int,
         sampleRate: Int,
         channelCount: Int,
-        streamIndex: Int
+        streamIndex: Int,
+        generation: UInt64 = 0
     ) {
         self.data = data
         self.presentationTime = presentationTime
@@ -82,6 +87,7 @@ public struct DecodedAudioSample: Equatable, Sendable {
         self.sampleRate = sampleRate
         self.channelCount = channelCount
         self.streamIndex = streamIndex
+        self.generation = generation
     }
 }
 
@@ -90,17 +96,20 @@ public struct DecodedSubtitleSample: Equatable, Sendable {
     public let presentationTime: TimeInterval
     public let duration: TimeInterval
     public let streamIndex: Int
+    public let generation: UInt64
 
     public init(
         text: String,
         presentationTime: TimeInterval,
         duration: TimeInterval,
-        streamIndex: Int
+        streamIndex: Int,
+        generation: UInt64 = 0
     ) {
         self.text = text
         self.presentationTime = presentationTime
         self.duration = duration
         self.streamIndex = streamIndex
+        self.generation = generation
     }
 }
 

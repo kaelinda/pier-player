@@ -73,7 +73,7 @@ let package = Package(
         ),
         .target(
             name: "FFmpegKit",
-            dependencies: ["PierFFmpeg"],
+            dependencies: ["PierFFmpeg", "MediaSourceKit", "StreamIOKit"],
             path: "Shared/Sources/FFmpegKit"
         ),
         .executableTarget(
@@ -123,7 +123,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FFmpegKitTests",
-            dependencies: ["FFmpegKit"],
+            dependencies: ["FFmpegKit", "MediaSourceKit", "StreamIOKit"],
             path: "Shared/Tests/FFmpegKitTests"
         ),
         .testTarget(
