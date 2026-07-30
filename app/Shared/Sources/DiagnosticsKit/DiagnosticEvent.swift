@@ -227,6 +227,22 @@ public struct DiagnosticEvent: Codable, Equatable, Sendable {
         self.payload = payload
         self.persistence = persistence
     }
+
+    func withSequence(_ sequence: UInt64) -> DiagnosticEvent {
+        DiagnosticEvent(
+            sequence: sequence,
+            wallTime: wallTime,
+            monotonicNanoseconds: monotonicNanoseconds,
+            level: level,
+            name: name,
+            context: context,
+            phase: phase,
+            outcome: outcome,
+            durationMilliseconds: durationMilliseconds,
+            payload: payload,
+            persistence: persistence
+        )
+    }
 }
 
 public enum DiagnosticEventEncoder {
