@@ -173,6 +173,10 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
     public let actualLength: Int?
     public let droppedEssentialEvents: UInt64?
     public let droppedDetailedEvents: UInt64?
+    public let cacheHits: UInt64?
+    public let cacheMisses: UInt64?
+    public let upstreamReads: UInt64?
+    public let upstreamBytes: UInt64?
     public let incidentKind: DiagnosticIncidentKind?
     public let error: DiagnosticErrorDescriptor?
 
@@ -186,6 +190,10 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         actualLength: Int? = nil,
         droppedEssentialEvents: UInt64? = nil,
         droppedDetailedEvents: UInt64? = nil,
+        cacheHits: UInt64? = nil,
+        cacheMisses: UInt64? = nil,
+        upstreamReads: UInt64? = nil,
+        upstreamBytes: UInt64? = nil,
         incidentKind: DiagnosticIncidentKind? = nil,
         error: DiagnosticErrorDescriptor? = nil
     ) {
@@ -198,6 +206,10 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         self.actualLength = actualLength
         self.droppedEssentialEvents = droppedEssentialEvents
         self.droppedDetailedEvents = droppedDetailedEvents
+        self.cacheHits = cacheHits
+        self.cacheMisses = cacheMisses
+        self.upstreamReads = upstreamReads
+        self.upstreamBytes = upstreamBytes
         self.incidentKind = incidentKind
         self.error = error
     }

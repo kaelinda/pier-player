@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import Foundation
 import Testing
 @testable import SMBSourceKit
@@ -106,6 +107,144 @@ import Testing
         #expect(await sourceConnection.disconnectCount == 1)
         #expect(await fileConnection.disconnectCount == 1)
     }
+
+    @Test func nativeFileRecordsReadFailureAndIdempotentClose() async throws {
+        let recorder = LibRecordingDiagnosticRecorder()
+        let handle = RecordingNativeFileHandle(
+            result: Data([8, 9]),
+            error: SMBClientError.readFailed
+        )
+        let connection = RecordingNativeConnection(fileHandle: handle)
+        let file = LibSMB2File(
+            size: 10,
+            handle: handle,
+            connection: connection,
+            diagnosticRecorder: recorder,
+            diagnosticContext: libDiagnosticContext,
+            sourceID: libSourceID,
+            fileID: String(repeating: "a", count: 64)
+        )
+
+        await #expect(throws: SMBClientError.readFailed) {
+            try await file.read(at: 0, length: 2)
+        }
+        await file.close()
+        await file.close()
+
+        let events = recorder.snapshot
+        let reads = events.filter { $0.name == .smbRead }
+        #expect(reads.map(\.phase) == [.begin, .end])
+        #expect(reads.last?.outcome == .failure)
+        #expect(reads.last?.payload.error?.code == .sourceReadFailed)
+        #expect(reads.last?.payload.fileID == String(repeating: "a", count: 64))
+        let closes = events.filter { $0.name == .smbClose }
+        #expect(closes.map(\.phase) == [.begin, .end])
+        #expect(closes.last?.outcome == .success)
+        #expect(await handle.closeCount == 1)
+        #expect(await connection.disconnectCount == 1)
+    }
+
+    @Test func nativeLifecycleUsesCorrelatedOpaqueDiagnostics() async throws {
+        let recorder = LibRecordingDiagnosticRecorder()
+        let identityProvider = HMACDiagnosticIdentityProvider(keyData: Data(repeating: 5, count: 32))
+        let modifiedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let handle = RecordingNativeFileHandle(result: Data([1, 2]))
+        let sourceConnection = RecordingNativeConnection(
+            entries: [.init(name: "private.mkv", kind: .file, size: 2, modifiedAt: modifiedAt)],
+            fileHandle: handle
+        )
+        let fileConnection = RecordingNativeConnection(
+            stat: .init(size: 2, modifiedAt: modifiedAt, kind: .file),
+            fileHandle: handle
+        )
+        let factory = RecordingNativeConnectionFactory(
+            connections: [sourceConnection, fileConnection]
+        )
+        let configuration = try SMBConnectionConfiguration(
+            sourceID: libSourceID,
+            displayName: "Private NAS",
+            host: "private.example",
+            share: "Confidential"
+        )
+        let client = LibSMB2Client(
+            configuration: configuration,
+            credential: try SMBCredential(username: "viewer", password: "secret"),
+            nativeFactory: factory,
+            diagnosticRecorder: recorder,
+            diagnosticContext: libDiagnosticContext,
+            identityProvider: identityProvider
+        )
+
+        try await client.connect()
+        _ = try await client.list(directory: SMBPath("/Private"))
+        let opened = try await client.open(file: SMBPath("/Private/customer.mkv"))
+        _ = try await opened.file.read(at: 0, length: 2)
+        await opened.file.close()
+        await opened.file.close()
+        await client.disconnect()
+
+        let events = recorder.snapshot
+        for name in [
+            DiagnosticEventName.smbConnect,
+            .smbList,
+            .smbStat,
+            .smbOpen,
+            .smbRead,
+            .smbClose,
+        ] {
+            let matching = events.filter { $0.name == name }
+            #expect(matching.map(\.phase) == [.begin, .end])
+            #expect(matching.first?.context.operationID == matching.last?.context.operationID)
+            #expect(matching.last?.outcome == .success)
+        }
+        let open = try #require(events.first { $0.name == .smbOpen && $0.phase == .begin })
+        let stat = try #require(events.first { $0.name == .smbStat && $0.phase == .begin })
+        let read = try #require(events.first { $0.name == .smbRead && $0.phase == .begin })
+        #expect(stat.context.parentOperationID == open.context.operationID)
+        #expect(read.context.parentOperationID == open.context.operationID)
+        #expect(events.allSatisfy { $0.payload.sourceID == libSourceID })
+
+        let expectedFileID = identityProvider.fileIdentity(
+            sourceID: libSourceID,
+            normalizedPath: "/Private/customer.mkv",
+            size: 2,
+            modifiedAt: modifiedAt
+        ).value
+        #expect(events.contains { $0.name == .smbRead && $0.payload.fileID == expectedFileID })
+        let encoded = try events.map(DiagnosticEventEncoder.encode)
+            .map { String(decoding: $0, as: UTF8.self) }
+            .joined()
+            .lowercased()
+        #expect(!encoded.contains("private.example"))
+        #expect(!encoded.contains("confidential"))
+        #expect(!encoded.contains("customer"))
+        #expect(!encoded.contains("viewer"))
+        #expect(!encoded.contains("secret"))
+    }
+}
+
+private let libSourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000311")!
+private let libDiagnosticContext = DiagnosticContext(
+    appRunID: UUID(uuidString: "00000000-0000-0000-0000-000000000312")!,
+    activityID: UUID(uuidString: "00000000-0000-0000-0000-000000000313")!,
+    operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000314")!
+)
+
+private final class LibRecordingDiagnosticRecorder: DiagnosticRecording, @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [DiagnosticEvent] = []
+
+    var snapshot: [DiagnosticEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return events
+    }
+
+    func record(_ event: DiagnosticEvent) {
+        lock.lock()
+        events.append(event)
+        lock.unlock()
+    }
 }
 
 private actor RecordingNativeConnectionFactory: SMBNativeConnectionFactory {
@@ -165,15 +304,18 @@ private actor RecordingNativeFileHandle: SMBNativeFileHandle {
     }
 
     private let result: Data
+    private let error: (any Error & Sendable)?
     private(set) var reads: [Read] = []
     private(set) var closeCount = 0
 
-    init(result: Data = Data()) {
+    init(result: Data = Data(), error: (any Error & Sendable)? = nil) {
         self.result = result
+        self.error = error
     }
 
     func read(at offset: Int64, length: Int) async throws -> Data {
         reads.append(.init(offset: offset, length: length))
+        if let error { throw error }
         return result
     }
 

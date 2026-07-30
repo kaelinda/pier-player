@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import Foundation
 import MediaSourceKit
 import Testing
@@ -95,9 +96,81 @@ import Testing
         }
     }
 
+    @Test func recordsCorrelatedResourceLifecycleWithoutRawIdentifiers() async throws {
+        let recorder = RecordingDiagnosticRecorder()
+        let identityProvider = HMACDiagnosticIdentityProvider(keyData: Data(repeating: 7, count: 32))
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000301")!
+        let modifiedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let file = FakeSMBClientFile(data: Data([0, 1, 2, 3]))
+        let client = FakeSMBClient(
+            entries: [.init(name: "film.mkv", kind: .file, size: 4, modifiedAt: modifiedAt)],
+            openedFile: SMBOpenedFile(file: file, size: 4, modifiedAt: modifiedAt)
+        )
+        let source = try makeSource(
+            sourceID: sourceID,
+            client: client,
+            recorder: recorder,
+            identityProvider: identityProvider
+        )
+
+        try await source.connect()
+        _ = try await source.list(directory: "/Private")
+        let readable = try await source.open(file: "/Private/customer-film.mkv")
+        _ = try await readable.read(at: 0, length: 2)
+        await readable.close()
+        await readable.close()
+        await source.disconnect()
+
+        let events = recorder.snapshot
+        assertOperationPair(named: .sourceConnect, in: events, outcome: .success)
+        assertOperationPair(named: .directoryList, in: events, outcome: .success)
+        assertOperationPair(named: .fileOpen, in: events, outcome: .success)
+        assertOperationPair(named: .fileClose, in: events, outcome: .success)
+        assertOperationPair(named: .sourceDisconnect, in: events, outcome: .success)
+        #expect(events.filter { $0.name == .fileClose }.count == 2)
+        #expect(events.allSatisfy { $0.payload.sourceID == sourceID })
+
+        let expectedFileID = identityProvider.fileIdentity(
+            sourceID: sourceID,
+            normalizedPath: "/Private/customer-film.mkv",
+            size: 4,
+            modifiedAt: modifiedAt
+        ).value
+        #expect(events.filter { $0.name == .fileOpen || $0.name == .fileClose }
+            .contains { $0.payload.fileID == expectedFileID })
+        let encoded = try events.map(DiagnosticEventEncoder.encode)
+            .map { String(decoding: $0, as: UTF8.self) }
+            .joined()
+            .lowercased()
+        #expect(!encoded.contains("nas.local"))
+        #expect(!encoded.contains("media"))
+        #expect(!encoded.contains("private"))
+        #expect(!encoded.contains("customer-film"))
+    }
+
+    @Test func recordsMappedConnectionFailure() async throws {
+        let recorder = RecordingDiagnosticRecorder()
+        let source = try makeSource(
+            client: FakeSMBClient(error: .unreachable),
+            recorder: recorder
+        )
+
+        await #expect(throws: MediaSourceError.unreachable(details: nil)) {
+            try await source.connect()
+        }
+
+        let end = try #require(recorder.snapshot.last)
+        #expect(end.name == .sourceConnect)
+        #expect(end.phase == .end)
+        #expect(end.outcome == .failure)
+        #expect(end.payload.error?.code == .sourceUnreachable)
+    }
+
     private func makeSource(
         sourceID: UUID = UUID(),
-        client: FakeSMBClient
+        client: FakeSMBClient,
+        recorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) throws -> SMBMediaSource {
         let configuration = try SMBConnectionConfiguration(
             sourceID: sourceID,
@@ -105,7 +178,48 @@ import Testing
             host: "nas.local",
             share: "Media"
         )
-        return SMBMediaSource(configuration: configuration, client: client)
+        return SMBMediaSource(
+            configuration: configuration,
+            client: client,
+            diagnosticRecorder: recorder,
+            diagnosticContext: fixedDiagnosticContext,
+            identityProvider: identityProvider
+        )
+    }
+}
+
+private let fixedDiagnosticContext = DiagnosticContext(
+    appRunID: UUID(uuidString: "00000000-0000-0000-0000-000000000302")!,
+    activityID: UUID(uuidString: "00000000-0000-0000-0000-000000000303")!,
+    operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000304")!
+)
+
+private func assertOperationPair(
+    named name: DiagnosticEventName,
+    in events: [DiagnosticEvent],
+    outcome: DiagnosticOutcome
+) {
+    let matching = events.filter { $0.name == name }
+    #expect(matching.count == 2)
+    #expect(matching.map(\.phase) == [.begin, .end])
+    #expect(matching.first?.context.operationID == matching.last?.context.operationID)
+    #expect(matching.last?.outcome == outcome)
+}
+
+private final class RecordingDiagnosticRecorder: DiagnosticRecording, @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [DiagnosticEvent] = []
+
+    var snapshot: [DiagnosticEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return events
+    }
+
+    func record(_ event: DiagnosticEvent) {
+        lock.lock()
+        events.append(event)
+        lock.unlock()
     }
 }
 

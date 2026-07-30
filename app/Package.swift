@@ -56,7 +56,7 @@ let package = Package(
         ),
         .target(
             name: "SMBSourceKit",
-            dependencies: ["MediaSourceKit", "CLibSMB2"],
+            dependencies: ["DiagnosticsKit", "MediaSourceKit", "CLibSMB2"],
             path: "Shared/Sources/SMBSourceKit",
             linkerSettings: [
                 .linkedFramework("Security"),
@@ -64,7 +64,7 @@ let package = Package(
         ),
         .target(
             name: "StreamIOKit",
-            dependencies: ["MediaSourceKit"],
+            dependencies: ["DiagnosticsKit", "MediaSourceKit"],
             path: "Shared/Sources/StreamIOKit"
         ),
         .target(
@@ -112,12 +112,12 @@ let package = Package(
         ),
         .testTarget(
             name: "StreamIOKitTests",
-            dependencies: ["StreamIOKit", "MediaSourceKit"],
+            dependencies: ["DiagnosticsKit", "StreamIOKit", "MediaSourceKit"],
             path: "Shared/Tests/StreamIOKitTests"
         ),
         .testTarget(
             name: "SMBSourceKitTests",
-            dependencies: ["SMBSourceKit"],
+            dependencies: ["DiagnosticsKit", "SMBSourceKit"],
             path: "Shared/Tests/SMBSourceKitTests"
         ),
         .testTarget(
