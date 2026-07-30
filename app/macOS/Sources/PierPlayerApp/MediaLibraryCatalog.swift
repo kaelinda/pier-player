@@ -149,7 +149,9 @@ final class MediaLibraryViewModel: ObservableObject {
     func reload(sources: [MediaLibrarySource]) async {
         reloadGeneration += 1
         let generation = reloadGeneration
-        snapshot = MediaLibrarySnapshot()
+        if sources.isEmpty {
+            snapshot = MediaLibrarySnapshot()
+        }
         isLoading = true
 
         defer {
@@ -192,6 +194,7 @@ final class MediaLibraryViewModel: ObservableObject {
         let scanner = scanner
         await withTaskGroup(of: MediaLibraryScanResult?.self) { group in
             var nextSourceIndex = 0
+            var hasReceivedSourceResult = false
 
             while nextSourceIndex < min(2, sources.count) {
                 let source = sources[nextSourceIndex]
@@ -208,6 +211,10 @@ final class MediaLibraryViewModel: ObservableObject {
                 }
 
                 if let result {
+                    if !hasReceivedSourceResult {
+                        snapshot = MediaLibrarySnapshot()
+                        hasReceivedSourceResult = true
+                    }
                     snapshot.items.append(contentsOf: result.items)
                     if let failure = result.failure {
                         snapshot.failures.append(failure)

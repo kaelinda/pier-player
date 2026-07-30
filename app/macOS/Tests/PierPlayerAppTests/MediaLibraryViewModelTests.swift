@@ -52,16 +52,59 @@ struct MediaLibraryViewModelTests {
         #expect(!viewModel.isLoading)
     }
 
+    @Test func reloadKeepsExistingSnapshotUntilFirstSourceResult() async throws {
+        let gate = SuspensionGate()
+        let completion = TaskCompletionProbe()
+        let initialItem = libraryItem(sourceName: "Existing NAS", path: "/existing.mp4")
+        let initialSnapshot = MediaLibrarySnapshot(items: [initialItem])
+        let source = MediaLibrarySource(id: UUID(), displayName: "Refreshing NAS") { path in
+            #expect(path == "/")
+            await gate.wait()
+            return [videoItem(path: "/refreshed.mp4")]
+        }
+        let viewModel = MediaLibraryViewModel(initialSnapshot: initialSnapshot)
+
+        let reload = Task {
+            await viewModel.reload(sources: [source])
+            await completion.markFinished()
+        }
+
+        let sourceDidStart = await eventually { await gate.hasWaiter }
+        if !sourceDidStart {
+            reload.cancel()
+            await gate.resume()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(sourceDidStart)
+        #expect(viewModel.snapshot == initialSnapshot)
+        #expect(viewModel.isLoading)
+
+        await gate.resume()
+        let reloadDidFinish = await eventually { await completion.didFinish }
+        if !reloadDidFinish {
+            reload.cancel()
+            await gate.resume()
+        }
+        try #require(reloadDidFinish)
+        await reload.value
+
+        #expect(viewModel.snapshot.items.map(\.media.path) == ["/refreshed.mp4"])
+        #expect(!viewModel.isLoading)
+    }
+
     @Test func reloadPublishesFastSourceWhileSlowSourceIsRunning() async throws {
         let slowGate = SuspensionGate()
         let completion = TaskCompletionProbe()
+        let initialItem = libraryItem(sourceName: "Existing NAS", path: "/existing.mp4")
         let slow = MediaLibrarySource(id: UUID(), displayName: "Slow NAS") { path in
             #expect(path == "/")
             await slowGate.wait()
             return [videoItem(path: "/slow.mp4")]
         }
         let fast = source(named: "Fast NAS", videoPath: "/fast.mp4")
-        let viewModel = MediaLibraryViewModel()
+        let viewModel = MediaLibraryViewModel(
+            initialSnapshot: MediaLibrarySnapshot(items: [initialItem])
+        )
 
         let reload = Task {
             await viewModel.reload(sources: [slow, fast])
@@ -171,8 +214,9 @@ struct MediaLibraryViewModelTests {
             return try await probe.list()
         }
         let initialItem = libraryItem(sourceName: "Preview", path: "/preview.mp4")
+        let initialSnapshot = MediaLibrarySnapshot(items: [initialItem])
         let viewModel = MediaLibraryViewModel(
-            initialSnapshot: MediaLibrarySnapshot(items: [initialItem])
+            initialSnapshot: initialSnapshot
         )
 
         let reload = Task {
@@ -186,7 +230,7 @@ struct MediaLibraryViewModelTests {
             _ = await eventually { await completion.didFinish }
         }
         try #require(sourceDidStart)
-        #expect(viewModel.snapshot == MediaLibrarySnapshot())
+        #expect(viewModel.snapshot == initialSnapshot)
         #expect(viewModel.isLoading)
 
         reload.cancel()
@@ -198,7 +242,7 @@ struct MediaLibraryViewModelTests {
         await reload.value
 
         #expect(await probe.didObserveCancellation)
-        #expect(viewModel.snapshot == MediaLibrarySnapshot())
+        #expect(viewModel.snapshot == initialSnapshot)
         #expect(!viewModel.isLoading)
     }
 
@@ -216,7 +260,9 @@ struct MediaLibraryViewModelTests {
             await newGate.wait()
             return [videoItem(path: "/new.mp4")]
         }
-        let viewModel = MediaLibraryViewModel()
+        let initialItem = libraryItem(sourceName: "Existing NAS", path: "/existing.mp4")
+        let initialSnapshot = MediaLibrarySnapshot(items: [initialItem])
+        let viewModel = MediaLibraryViewModel(initialSnapshot: initialSnapshot)
 
         let oldReload = Task {
             await viewModel.reload(sources: [oldSource])
@@ -228,6 +274,7 @@ struct MediaLibraryViewModelTests {
             _ = await eventually { await oldCompletion.didFinish }
         }
         try #require(oldDidStart)
+        #expect(viewModel.snapshot == initialSnapshot)
 
         let newReload = Task {
             await viewModel.reload(sources: [newSource])
@@ -256,7 +303,7 @@ struct MediaLibraryViewModelTests {
         }
         try #require(oldReloadDidFinish)
         await oldReload.value
-        #expect(viewModel.snapshot == MediaLibrarySnapshot())
+        #expect(viewModel.snapshot == initialSnapshot)
         #expect(viewModel.isLoading)
 
         await newGate.resume()
