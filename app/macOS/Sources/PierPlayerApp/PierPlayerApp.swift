@@ -37,7 +37,6 @@ struct PierPlayerApp: App {
             RootView()
                 .environmentObject(appModel)
                 .tint(.teal)
-                .preferredColorScheme(.dark)
                 .frame(minWidth: 820, minHeight: 560)
                 .task {
                     await appModel.restore()

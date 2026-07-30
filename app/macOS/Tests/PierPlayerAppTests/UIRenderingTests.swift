@@ -100,6 +100,27 @@ import Testing
     )
 }
 
+@Test func mediaLibrarySummaryAdaptsToLibraryCounts() {
+    let empty = MediaLibrarySummary(videoCount: 0, sourceCount: 0)
+    #expect(empty.primaryText == "No videos")
+    #expect(empty.secondaryText == "Connect a source to begin")
+
+    let single = MediaLibrarySummary(videoCount: 1, sourceCount: 1)
+    #expect(single.primaryText == "1 video")
+    #expect(single.secondaryText == "From 1 source")
+
+    let populated = MediaLibrarySummary(videoCount: 8, sourceCount: 2)
+    #expect(populated.primaryText == "8 videos")
+    #expect(populated.secondaryText == "Across 2 sources")
+}
+
+@Test func playbackTimeLabelsUseHoursOnlyWhenNeeded() {
+    #expect(PlaybackControlCopy.timeLabel(.nan) == "0:00")
+    #expect(PlaybackControlCopy.timeLabel(-1) == "0:00")
+    #expect(PlaybackControlCopy.timeLabel(65) == "1:05")
+    #expect(PlaybackControlCopy.timeLabel(3_661) == "1:01:01")
+}
+
 @MainActor
 @Test func rootViewRendersAtMinimumWindowSize() throws {
     let size = CGSize(width: 820, height: 560)
@@ -109,7 +130,8 @@ import Testing
             .tint(.teal)
             .preferredColorScheme(.dark)
             .frame(width: size.width, height: size.height),
-        at: size
+        at: size,
+        appearance: NSAppearance(named: .darkAqua)
     )
 
     #expect(image.size == size)
@@ -133,7 +155,8 @@ import Testing
         .preferredColorScheme(.dark)
         .tint(.teal)
         .frame(width: size.width, height: size.height),
-        at: size
+        at: size,
+        appearance: NSAppearance(named: .darkAqua)
     )
 
     #expect(image.size == size)
@@ -168,7 +191,7 @@ func populatedMediaLibraryRenders(
     snapshotName: String
 ) throws {
     let fixture = mediaLibraryFixture()
-    let image = try render(
+    let image = try renderInWindow(
         MediaLibraryContentView(
             snapshot: fixture.snapshot,
             sourceSummaries: fixture.sources,
@@ -182,12 +205,41 @@ func populatedMediaLibraryRenders(
         .preferredColorScheme(.dark)
         .tint(.teal)
         .frame(width: size.width, height: size.height),
-        at: size
+        at: size,
+        appearance: NSAppearance(named: .darkAqua)
     )
 
     #expect(image.size == size)
     #expect(image.tiffRepresentation?.isEmpty == false)
     try writeSnapshotIfRequested(image, name: snapshotName)
+}
+
+@MainActor
+@Test func populatedMediaLibraryRendersInLightAppearance() throws {
+    let size = CGSize(width: 1_120, height: 720)
+    let fixture = mediaLibraryFixture()
+    let image = try renderInWindow(
+        MediaLibraryContentView(
+            snapshot: fixture.snapshot,
+            sourceSummaries: fixture.sources,
+            isRestoring: false,
+            isScanning: false,
+            query: "",
+            play: { _ in },
+            openSource: { _ in },
+            addSource: {}
+        )
+        .preferredColorScheme(.light)
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size,
+        appearance: NSAppearance(named: .aqua)
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(darkPixelFraction(in: image) < 0.6)
+    try writeSnapshotIfRequested(image, name: "media-library-light")
 }
 
 @MainActor
@@ -265,9 +317,11 @@ private func render<Content: View>(_ content: Content, at size: CGSize) throws -
 @MainActor
 private func renderInWindow<Content: View>(
     _ content: Content,
-    at size: CGSize
+    at size: CGSize,
+    appearance: NSAppearance? = nil
 ) throws -> NSImage {
     let hostingView = NSHostingView(rootView: content)
+    hostingView.appearance = appearance
     hostingView.frame = NSRect(origin: .zero, size: size)
 
     let window = NSWindow(
@@ -277,6 +331,7 @@ private func renderInWindow<Content: View>(
         defer: false
     )
     window.isReleasedWhenClosed = false
+    window.appearance = appearance
     window.contentView = hostingView
     window.orderFrontRegardless()
     defer {

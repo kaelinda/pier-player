@@ -49,7 +49,7 @@ struct SourceBrowserView: View {
     private var browserHeader: some View {
         HStack(spacing: 12) {
             ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.teal.opacity(0.12))
                 Image(systemName: path == "/" ? "externaldrive.fill" : "folder.fill")
                     .font(.system(size: 16, weight: .medium))
@@ -181,7 +181,7 @@ private struct MediaItemRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(iconColor.opacity(0.12))
                 Image(systemName: iconName)
                     .font(.system(size: 15, weight: .medium))
@@ -228,7 +228,7 @@ private struct MediaItemRow: View {
 
     private var iconColor: Color {
         if item.kind == .directory { return .teal }
-        if item.isSupportedVideo { return .orange }
+        if item.isSupportedVideo { return .teal }
         return .secondary
     }
 
