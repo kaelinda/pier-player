@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import Foundation
 import MediaSourceKit
 import Testing
@@ -122,6 +123,90 @@ import Testing
             try await loader.load(offset: 0, length: 4) { _ in }
         }
         #expect(await file.readRequests.isEmpty)
+    }
+
+    @Test func diagnosticsCorrelateRequestChunksCancellationAndClose() async throws {
+        let bytes = Data((0..<12).map(UInt8.init))
+        let file = RecordingReadableFile(bytes: bytes)
+        let recorder = AppRecordingDiagnosticRecorder()
+        let identityProvider = HMACDiagnosticIdentityProvider(keyData: Data(repeating: 3, count: 32))
+        let loader = try ProgressiveMediaLoader(
+            file: file,
+            maximumReadLength: 4,
+            diagnosticRecorder: recorder,
+            diagnosticContext: appDiagnosticContext,
+            identityProvider: identityProvider
+        )
+
+        try await loader.load(offset: 0, length: 8) { _ in }
+        await loader.close()
+        await loader.close()
+
+        let events = recorder.snapshot
+        let request = try #require(events.first {
+            $0.name == .resourceRequest && $0.phase == .begin
+        })
+        let reads = events.filter { $0.name == .resourceRead }
+        #expect(reads.filter { $0.phase == .begin }.count == 2)
+        #expect(reads.filter { $0.phase == .begin }.allSatisfy {
+            $0.context.parentOperationID == request.context.operationID
+        })
+        #expect(reads.filter { $0.phase == .end }.map(\.payload.actualLength) == [4, 4])
+        let closes = events.filter { $0.name == .fileClose }
+        #expect(closes.map(\.phase) == [.begin, .end])
+
+        let expectedFileID = identityProvider.fileIdentity(
+            sourceID: file.identity.sourceID,
+            normalizedPath: file.identity.path,
+            size: file.identity.size,
+            modifiedAt: file.identity.modifiedAt
+        ).value
+        #expect(events.allSatisfy { $0.context.activityID == appDiagnosticContext.activityID })
+        #expect(events.contains { $0.payload.fileID == expectedFileID })
+        let encoded = try events.map(DiagnosticEventEncoder.encode)
+            .map { String(decoding: $0, as: UTF8.self) }
+            .joined()
+            .lowercased()
+        #expect(!encoded.contains("fixture.mp4"))
+    }
+
+    @Test func diagnosticReadMapsUnexpectedEOFAndCancellation() async throws {
+        let eofRecorder = AppRecordingDiagnosticRecorder()
+        let eofLoader = try ProgressiveMediaLoader(
+            file: RecordingReadableFile(
+                bytes: Data(repeating: 1, count: 8),
+                emptyReadOffsets: [0]
+            ),
+            maximumReadLength: 4,
+            diagnosticRecorder: eofRecorder,
+            diagnosticContext: appDiagnosticContext
+        )
+        await #expect(throws: ProgressiveMediaLoaderError.unexpectedEndOfFile(offset: 0)) {
+            try await eofLoader.load(offset: 0, length: 4) { _ in }
+        }
+        let eofEnd = try #require(eofRecorder.snapshot.last { $0.name == .resourceRead })
+        #expect(eofEnd.outcome == .failure)
+        #expect(eofEnd.payload.error?.code == .streamUnexpectedShortRead)
+
+        let cancellationRecorder = AppRecordingDiagnosticRecorder()
+        let suspended = SuspendedReadableFile(size: 8)
+        let cancellationLoader = try ProgressiveMediaLoader(
+            file: suspended,
+            maximumReadLength: 4,
+            diagnosticRecorder: cancellationRecorder,
+            diagnosticContext: appDiagnosticContext
+        )
+        let task = Task {
+            try await cancellationLoader.load(offset: 0, length: 4) { _ in }
+        }
+        await suspended.waitUntilReadStarts()
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        let cancelled = try #require(
+            cancellationRecorder.snapshot.last { $0.name == .resourceRead }
+        )
+        #expect(cancelled.outcome == .cancelled)
+        #expect(cancelled.payload.error == nil)
     }
 }
 

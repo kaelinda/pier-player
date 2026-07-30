@@ -115,6 +115,23 @@ public enum DiagnosticContainerKind: String, Codable, Equatable, Sendable {
     }
 }
 
+public enum DiagnosticPlaybackState: String, Codable, Equatable, Sendable {
+    case idle
+    case connecting
+    case opening
+    case bufferingInitial = "buffering_initial"
+    case bufferingSeek = "buffering_seek"
+    case bufferingRecovery = "buffering_recovery"
+    case preparing
+    case ready
+    case playing
+    case paused
+    case waiting
+    case reconnecting
+    case ended
+    case failed
+}
+
 public enum DiagnosticErrorCode: String, Codable, Equatable, Sendable {
     case sourceNotConnected = "source_not_connected"
     case sourceAuthenticationFailed = "source_authentication_failed"
@@ -177,6 +194,11 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
     public let cacheMisses: UInt64?
     public let upstreamReads: UInt64?
     public let upstreamBytes: UInt64?
+    public let playbackSessionID: UUID?
+    public let playbackGeneration: UInt64?
+    public let oldPlaybackState: DiagnosticPlaybackState?
+    public let newPlaybackState: DiagnosticPlaybackState?
+    public let playbackPositionSeconds: Double?
     public let incidentKind: DiagnosticIncidentKind?
     public let error: DiagnosticErrorDescriptor?
 
@@ -194,6 +216,11 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         cacheMisses: UInt64? = nil,
         upstreamReads: UInt64? = nil,
         upstreamBytes: UInt64? = nil,
+        playbackSessionID: UUID? = nil,
+        playbackGeneration: UInt64? = nil,
+        oldPlaybackState: DiagnosticPlaybackState? = nil,
+        newPlaybackState: DiagnosticPlaybackState? = nil,
+        playbackPositionSeconds: Double? = nil,
         incidentKind: DiagnosticIncidentKind? = nil,
         error: DiagnosticErrorDescriptor? = nil
     ) {
@@ -210,6 +237,11 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         self.cacheMisses = cacheMisses
         self.upstreamReads = upstreamReads
         self.upstreamBytes = upstreamBytes
+        self.playbackSessionID = playbackSessionID
+        self.playbackGeneration = playbackGeneration
+        self.oldPlaybackState = oldPlaybackState
+        self.newPlaybackState = newPlaybackState
+        self.playbackPositionSeconds = playbackPositionSeconds
         self.incidentKind = incidentKind
         self.error = error
     }

@@ -69,16 +69,19 @@ let package = Package(
         ),
         .target(
             name: "PlaybackCore",
+            dependencies: ["DiagnosticsKit"],
             path: "Shared/Sources/PlaybackCore"
         ),
         .target(
             name: "PlaybackTelemetry",
+            dependencies: ["DiagnosticsKit"],
             path: "Shared/Sources/PlaybackTelemetry"
         ),
         .executableTarget(
             name: "PierPlayerApp",
             dependencies: [
                 "MediaSourceKit",
+                "DiagnosticsKit",
                 "StreamIOKit",
                 "PlaybackCore",
                 "PlaybackTelemetry",
@@ -122,17 +125,17 @@ let package = Package(
         ),
         .testTarget(
             name: "PlaybackCoreTests",
-            dependencies: ["PlaybackCore"],
+            dependencies: ["DiagnosticsKit", "PlaybackCore"],
             path: "Shared/Tests/PlaybackCoreTests"
         ),
         .testTarget(
             name: "PlaybackTelemetryTests",
-            dependencies: ["PlaybackTelemetry"],
+            dependencies: ["DiagnosticsKit", "PlaybackTelemetry"],
             path: "Shared/Tests/PlaybackTelemetryTests"
         ),
         .testTarget(
             name: "PierPlayerAppTests",
-            dependencies: ["PierPlayerApp"],
+            dependencies: ["DiagnosticsKit", "PierPlayerApp"],
             path: "macOS/Tests/PierPlayerAppTests"
         ),
     ]

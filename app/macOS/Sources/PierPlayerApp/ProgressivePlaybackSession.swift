@@ -1,4 +1,5 @@
 import AVFoundation
+import DiagnosticsKit
 import Foundation
 import MediaSourceKit
 
@@ -29,6 +30,109 @@ enum ProgressivePlaybackError: Error, Equatable, LocalizedError, Sendable {
         case .resourceLoaderClosed:
             "The media resource is no longer available."
         }
+    }
+}
+
+enum DiagnosticPlayerObservation: Sendable {
+    case ready
+    case playing
+    case paused
+    case waiting
+    case ended
+    case failed
+}
+
+@MainActor
+final class PlaybackStateDiagnosticAdapter {
+    private let diagnosticRecorder: any DiagnosticRecording
+    private let diagnosticContext: DiagnosticContext
+    private let monotonicNow: @Sendable () -> TimeInterval
+    private var state: DiagnosticPlaybackState = .preparing
+    private var waitingSince: TimeInterval?
+    private var didRecordLongWait = false
+    private var recentShortStalls: [TimeInterval] = []
+
+    init(
+        diagnosticRecorder: any DiagnosticRecording,
+        diagnosticContext: DiagnosticContext,
+        monotonicNow: @escaping @Sendable () -> TimeInterval = {
+            ProcessInfo.processInfo.systemUptime
+        }
+    ) {
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext
+        self.monotonicNow = monotonicNow
+    }
+
+    func observe(_ observation: DiagnosticPlayerObservation) {
+        switch observation {
+        case .ready:
+            record(name: .playbackReady, newState: .ready, outcome: .success)
+        case .playing:
+            recoverIfWaiting(at: monotonicNow())
+            state = .playing
+        case .paused:
+            record(name: .playbackPause, newState: .paused, outcome: .success)
+        case .waiting:
+            if waitingSince == nil {
+                waitingSince = monotonicNow()
+                didRecordLongWait = false
+                state = .waiting
+            }
+        case .ended:
+            record(name: .playbackEnded, newState: .ended, outcome: .success)
+        case .failed:
+            record(
+                name: .playbackFailed,
+                newState: .failed,
+                outcome: .failure,
+                error: DiagnosticErrorDescriptor(code: .playerFailed)
+            )
+        }
+    }
+
+    func poll() {
+        guard let waitingSince, !didRecordLongWait else { return }
+        guard monotonicNow() - waitingSince >= 3 else { return }
+        didRecordLongWait = true
+        record(name: .playbackStall, newState: .waiting, outcome: .failure)
+    }
+
+    private func recoverIfWaiting(at timestamp: TimeInterval) {
+        guard waitingSince != nil else { return }
+        if !didRecordLongWait {
+            recentShortStalls = recentShortStalls.filter { timestamp - $0 <= 60 }
+            recentShortStalls.append(timestamp)
+            if recentShortStalls.count >= 3 {
+                record(name: .playbackStall, newState: .waiting, outcome: .failure)
+                recentShortStalls.removeAll(keepingCapacity: true)
+            }
+        }
+        record(name: .playbackRecover, newState: .playing, outcome: .success)
+        waitingSince = nil
+        didRecordLongWait = false
+    }
+
+    private func record(
+        name: DiagnosticEventName,
+        newState: DiagnosticPlaybackState,
+        outcome: DiagnosticOutcome,
+        error: DiagnosticErrorDescriptor? = nil
+    ) {
+        let oldState = state
+        state = newState
+        diagnosticRecorder.record(.instant(
+            level: outcome == .failure ? .error : .info,
+            name: name,
+            context: diagnosticContext.child(),
+            outcome: outcome,
+            payload: DiagnosticPayload(
+                oldPlaybackState: oldState,
+                newPlaybackState: newState,
+                error: error
+            ),
+            persistence: .essential
+        ))
     }
 }
 
@@ -217,16 +321,37 @@ final class ProgressivePlaybackSession: VideoPlaybackSession {
     let asset: AVURLAsset
 
     private let resourceLoader: ProgressiveMediaResourceLoader
+    private let stateAdapter: PlaybackStateDiagnosticAdapter
+    private var itemStatusObservation: NSKeyValueObservation?
+    private var timeControlObservation: NSKeyValueObservation?
+    private var notificationTokens: [NSObjectProtocol] = []
+    private var stallMonitorTask: Task<Void, Never>?
     private var isStopped = false
 
-    init(file: any MediaReadableFile, fileName: String) throws {
+    init(
+        file: any MediaReadableFile,
+        fileName: String,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
+    ) throws {
         guard let mediaType = AVFoundationMediaType(fileName: fileName) else {
             throw ProgressivePlaybackError.unsupportedContainer(
                 (fileName as NSString).pathExtension.lowercased()
             )
         }
 
-        let mediaLoader = try ProgressiveMediaLoader(file: file)
+        let context = diagnosticContext ?? DiagnosticContext(
+            appRunID: UUID(),
+            activityID: UUID(),
+            operationID: UUID()
+        )
+        let mediaLoader = try ProgressiveMediaLoader(
+            file: file,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: context,
+            identityProvider: identityProvider
+        )
         let resourceLoader = ProgressiveMediaResourceLoader(
             mediaLoader: mediaLoader,
             contentType: mediaType.contentType
@@ -237,6 +362,11 @@ final class ProgressivePlaybackSession: VideoPlaybackSession {
         self.resourceLoader = resourceLoader
         self.asset = asset
         self.player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        self.stateAdapter = PlaybackStateDiagnosticAdapter(
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: context
+        )
+        installObservers()
     }
 
     func play() {
@@ -246,9 +376,110 @@ final class ProgressivePlaybackSession: VideoPlaybackSession {
     func stop() async {
         guard !isStopped else { return }
         isStopped = true
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        timeControlObservation?.invalidate()
+        timeControlObservation = nil
+        stallMonitorTask?.cancel()
+        stallMonitorTask = nil
+        for token in notificationTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        notificationTokens.removeAll()
         player.pause()
         asset.cancelLoading()
         await resourceLoader.close()
+    }
+
+    private func installObservers() {
+        guard let item = player.currentItem else { return }
+        itemStatusObservation = item.observe(\.status, options: [.initial, .new]) {
+            [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch item.status {
+                case .unknown:
+                    break
+                case .readyToPlay:
+                    stateAdapter.observe(.ready)
+                case .failed:
+                    stateAdapter.observe(.failed)
+                @unknown default:
+                    stateAdapter.observe(.failed)
+                }
+            }
+        }
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
+            [weak self] player, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch player.timeControlStatus {
+                case .paused:
+                    stateAdapter.observe(.paused)
+                case .waitingToPlayAtSpecifiedRate:
+                    stateAdapter.observe(.waiting)
+                case .playing:
+                    stateAdapter.observe(.playing)
+                @unknown default:
+                    break
+                }
+            }
+        }
+        notificationTokens = [
+            NotificationCenter.default.addObserver(
+                forName: AVPlayerItem.didPlayToEndTimeNotification,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.stateAdapter.observe(.ended)
+                }
+            },
+            NotificationCenter.default.addObserver(
+                forName: AVPlayerItem.failedToPlayToEndTimeNotification,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.stateAdapter.observe(.failed)
+                }
+            },
+        ]
+        stallMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    break
+                }
+                self?.stateAdapter.poll()
+            }
+        }
+    }
+}
+
+enum LoadingRequestCompletion: Sendable {
+    case finished
+    case failed
+    case cancelled
+}
+
+final class LoadingRequestCompletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: LoadingRequestCompletion?
+
+    func claim(_ completion: LoadingRequestCompletion) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard self.completion == nil else { return false }
+        self.completion = completion
+        return true
+    }
+
+    var isCompleted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return completion != nil
     }
 }
 
@@ -301,54 +532,29 @@ private final class LoadingOperation: @unchecked Sendable {
 }
 
 private final class LoadingRequest: @unchecked Sendable {
-    private enum State {
-        case active
-        case cancelled
-        case finished
-    }
-
     private let request: AVAssetResourceLoadingRequest
-    private let lock = NSLock()
-    private var state = State.active
+    private let completionGate = LoadingRequestCompletionGate()
 
     init(_ request: AVAssetResourceLoadingRequest) {
         self.request = request
     }
 
     func respond(with data: Data) {
-        lock.lock()
-        let shouldRespond = state == .active
-        lock.unlock()
-        guard shouldRespond else { return }
+        guard !completionGate.isCompleted else { return }
         request.dataRequest?.respond(with: data)
     }
 
     func finish() {
-        lock.lock()
-        guard state == .active else {
-            lock.unlock()
-            return
-        }
-        state = .finished
-        lock.unlock()
+        guard completionGate.claim(.finished) else { return }
         request.finishLoading()
     }
 
     func finish(with error: Error) {
-        lock.lock()
-        guard state == .active else {
-            lock.unlock()
-            return
-        }
-        state = .finished
-        lock.unlock()
+        guard completionGate.claim(.failed) else { return }
         request.finishLoading(with: error)
     }
 
     func cancel() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard state == .active else { return }
-        state = .cancelled
+        _ = completionGate.claim(.cancelled)
     }
 }

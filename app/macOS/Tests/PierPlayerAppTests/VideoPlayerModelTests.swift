@@ -1,6 +1,8 @@
 import AVFoundation
+import DiagnosticsKit
 import Foundation
 import MediaSourceKit
+import SMBSourceKit
 import Testing
 @testable import PierPlayerApp
 
@@ -63,6 +65,82 @@ import Testing
         #expect(await file.closeCount == 1)
         #expect(model.player == nil)
         #expect(model.phase == .failed("sessionConstructionFailed"))
+    }
+
+    @Test func playbackActivityRecordsOpenPreparePlayStopWithoutRawMediaIdentity() async throws {
+        let file = ModelRecordingReadableFile(size: 1_024)
+        let source = ModelFakeMediaSource(file: file)
+        let session = FakeVideoPlaybackSession()
+        let recorder = AppRecordingDiagnosticRecorder()
+        let identityProvider = HMACDiagnosticIdentityProvider(keyData: Data(repeating: 4, count: 32))
+        let model = VideoPlayerModel(
+            item: videoFixtureItem,
+            source: source,
+            diagnosticRecorder: recorder,
+            diagnosticContext: appDiagnosticContext,
+            identityProvider: identityProvider,
+            sessionFactory: { _, _ in session }
+        )
+
+        await model.start()
+        await model.stop()
+
+        let events = recorder.snapshot
+        for name in [
+            DiagnosticEventName.fileOpen,
+            .playbackPrepare,
+            .playbackPlay,
+            .playbackStop,
+        ] {
+            #expect(events.contains { $0.name == name })
+        }
+        #expect(events.allSatisfy { $0.context.activityID == appDiagnosticContext.activityID })
+        let expectedFileID = identityProvider.fileIdentity(
+            sourceID: file.identity.sourceID,
+            normalizedPath: file.identity.path,
+            size: file.identity.size,
+            modifiedAt: file.identity.modifiedAt
+        ).value
+        #expect(events.contains { $0.name == .fileOpen && $0.payload.fileID == expectedFileID })
+        let encoded = try events.map(DiagnosticEventEncoder.encode)
+            .map { String(decoding: $0, as: UTF8.self) }
+            .joined()
+            .lowercased()
+        #expect(!encoded.contains("large fixture"))
+        #expect(!encoded.contains("/movies"))
+    }
+
+    @Test func restoreUsesTypedDiagnosticsAndContainsNoLegacyLogWriter() async throws {
+        let recorder = AppRecordingDiagnosticRecorder()
+        let model = AppModel(
+            sourceStore: SMBSourceStore(fallback: ()),
+            diagnosticRecorder: recorder,
+            diagnosticContext: appDiagnosticContext
+        )
+
+        await model.restore()
+
+        let restore = try #require(recorder.snapshot.last { $0.name == .sourceRestore })
+        #expect(restore.outcome == .failure)
+        let encoded = String(
+            decoding: try DiagnosticEventEncoder.encode(restore),
+            as: UTF8.self
+        ).lowercased()
+        #expect(!encoded.contains("username"))
+        #expect(!encoded.contains("displayname"))
+        #expect(!encoded.contains("host"))
+        #expect(!encoded.contains("share"))
+        #expect(!encoded.contains("path"))
+
+        let testFile = URL(fileURLWithPath: #filePath)
+        let macOSRoot = testFile.deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: macOSRoot.appendingPathComponent("Sources/PierPlayerApp/AppModel.swift"),
+            encoding: .utf8
+        )
+        #expect(!source.contains("pier_restore.log"))
     }
 }
 

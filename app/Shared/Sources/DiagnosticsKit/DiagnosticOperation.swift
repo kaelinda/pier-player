@@ -67,6 +67,11 @@ public struct DiagnosticOperation: Sendable {
                 cacheMisses: payload.cacheMisses,
                 upstreamReads: payload.upstreamReads,
                 upstreamBytes: payload.upstreamBytes,
+                playbackSessionID: payload.playbackSessionID,
+                playbackGeneration: payload.playbackGeneration,
+                oldPlaybackState: payload.oldPlaybackState,
+                newPlaybackState: payload.newPlaybackState,
+                playbackPositionSeconds: payload.playbackPositionSeconds,
                 incidentKind: payload.incidentKind,
                 error: error ?? payload.error
             ),

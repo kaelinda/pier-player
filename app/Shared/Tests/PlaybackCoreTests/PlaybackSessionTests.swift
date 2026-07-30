@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import Foundation
 import Testing
 @testable import PlaybackCore
@@ -123,5 +124,88 @@ import Testing
 
     await #expect(throws: PlaybackCommandError.self) {
         try await session.pause()
+    }
+}
+
+@Test func playbackTransitionsRecordTypedStateGenerationAndRejections() async throws {
+    let recorder = PlaybackRecordingDiagnosticRecorder()
+    let context = DiagnosticContext(
+        appRunID: UUID(uuidString: "00000000-0000-0000-0000-000000000401")!,
+        activityID: UUID(uuidString: "00000000-0000-0000-0000-000000000402")!,
+        operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000403")!
+    )
+    let session = PlaybackSession(
+        diagnosticRecorder: recorder,
+        diagnosticContext: context
+    )
+
+    let opening = try await session.open()
+    #expect(await session.connectionEstablished(token: opening))
+    #expect(await session.mediaOpened(token: opening))
+    #expect(await session.bufferingCompleted(token: opening))
+    try await session.pause()
+    try await session.resume()
+    let firstSeek = try await session.seek(to: 10)
+    _ = try await session.seek(to: 20)
+    #expect(!(await session.bufferingCompleted(token: firstSeek)))
+    await session.stop()
+
+    let events = recorder.snapshot
+    let opened = try #require(events.first {
+        $0.name == .playbackPrepare && $0.outcome == .success
+    })
+    #expect(opened.payload.oldPlaybackState == .idle)
+    #expect(opened.payload.newPlaybackState == .connecting)
+    #expect(opened.payload.playbackGeneration == 0)
+    #expect(opened.payload.playbackSessionID == opening.sessionID)
+
+    let rejected = try #require(events.last { $0.outcome == .discarded })
+    #expect(rejected.level == .warning)
+    #expect(rejected.payload.playbackGeneration == 2)
+    let stopped = try #require(events.last { $0.name == .playbackStop })
+    #expect(stopped.outcome == .success)
+    #expect(stopped.payload.newPlaybackState == .idle)
+
+    let encoded = try events.map(DiagnosticEventEncoder.encode)
+        .map { String(decoding: $0, as: UTF8.self) }
+        .joined()
+        .lowercased()
+    #expect(!encoded.contains("\"command\""))
+}
+
+@Test func playbackFailureDoesNotPersistFreeFormMessage() async throws {
+    let recorder = PlaybackRecordingDiagnosticRecorder()
+    let session = PlaybackSession(diagnosticRecorder: recorder)
+    _ = try await session.open()
+
+    await session.fail("smb://private.example/Secret/customer.mkv")
+
+    let failed = try #require(recorder.snapshot.last)
+    #expect(failed.name == .playbackFailed)
+    #expect(failed.outcome == .failure)
+    #expect(failed.payload.newPlaybackState == .failed)
+    #expect(failed.payload.error?.code == .playerFailed)
+    let encoded = String(
+        decoding: try DiagnosticEventEncoder.encode(failed),
+        as: UTF8.self
+    ).lowercased()
+    #expect(!encoded.contains("private.example"))
+    #expect(!encoded.contains("customer"))
+}
+
+private final class PlaybackRecordingDiagnosticRecorder: DiagnosticRecording, @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [DiagnosticEvent] = []
+
+    var snapshot: [DiagnosticEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return events
+    }
+
+    func record(_ event: DiagnosticEvent) {
+        lock.lock()
+        events.append(event)
+        lock.unlock()
     }
 }

@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import Foundation
 import Testing
 @testable import PierPlayerApp
@@ -87,6 +88,75 @@ import Testing
         )
 
         #expect(range == nil)
+    }
+
+    @Test @MainActor func stateAdapterRecordsReadyLongWaitBurstStallsAndTerminalStates() throws {
+        let recorder = AppRecordingDiagnosticRecorder()
+        let clock = MonotonicTestClock()
+        let longWait = PlaybackStateDiagnosticAdapter(
+            diagnosticRecorder: recorder,
+            diagnosticContext: appDiagnosticContext,
+            monotonicNow: { clock.now }
+        )
+
+        longWait.observe(.ready)
+        longWait.observe(.waiting)
+        clock.advance(by: 4)
+        longWait.poll()
+        longWait.observe(.playing)
+        longWait.observe(.ended)
+
+        let burst = PlaybackStateDiagnosticAdapter(
+            diagnosticRecorder: recorder,
+            diagnosticContext: appDiagnosticContext,
+            monotonicNow: { clock.now }
+        )
+        for _ in 0..<3 {
+            burst.observe(.waiting)
+            clock.advance(by: 1)
+            burst.observe(.playing)
+        }
+
+        let failed = PlaybackStateDiagnosticAdapter(
+            diagnosticRecorder: recorder,
+            diagnosticContext: appDiagnosticContext,
+            monotonicNow: { clock.now }
+        )
+        failed.observe(.failed)
+
+        let events = recorder.snapshot
+        #expect(events.filter { $0.name == .playbackReady }.count == 1)
+        #expect(events.filter { $0.name == .playbackStall }.count == 2)
+        #expect(events.filter { $0.name == .playbackRecover }.count == 4)
+        #expect(events.filter { $0.name == .playbackEnded }.count == 1)
+        let failure = try #require(events.last { $0.name == .playbackFailed })
+        #expect(failure.outcome == .failure)
+        #expect(failure.payload.error?.code == .playerFailed)
+    }
+
+    @Test func loadingCompletionGateAllowsOneTerminalAction() {
+        let gate = LoadingRequestCompletionGate()
+
+        #expect(gate.claim(.finished))
+        #expect(!gate.claim(.cancelled))
+        #expect(!gate.claim(.failed))
+    }
+}
+
+private final class MonotonicTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 0
+
+    var now: TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        value += interval
+        lock.unlock()
     }
 }
 

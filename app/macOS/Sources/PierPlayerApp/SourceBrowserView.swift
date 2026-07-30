@@ -1,4 +1,5 @@
 import AVKit
+import DiagnosticsKit
 import MediaSourceKit
 import SMBSourceKit
 import SwiftUI
@@ -18,26 +19,95 @@ final class VideoPlayerModel: ObservableObject {
     }
 
     private let sessionFactory: VideoPlaybackSessionFactory
+    private let diagnosticRecorder: any DiagnosticRecording
+    private let diagnosticContext: DiagnosticContext
+    private let identityProvider: (any DiagnosticIdentityProviding)?
+    private var activeDiagnosticPayload: DiagnosticPayload?
     private var playbackSession: (any VideoPlaybackSession)?
 
     init(
         item: MediaSourceItem,
         source: any MediaSource,
-        sessionFactory: @escaping VideoPlaybackSessionFactory = { file, fileName in
-            try ProgressivePlaybackSession(file: file, fileName: fileName)
-        }
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil,
+        sessionFactory: VideoPlaybackSessionFactory? = nil
     ) {
+        let context = diagnosticContext ?? DiagnosticContext(
+            appRunID: UUID(),
+            activityID: UUID(),
+            operationID: UUID()
+        )
         self.item = item
         self.source = source
-        self.sessionFactory = sessionFactory
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = context
+        self.identityProvider = identityProvider
+        self.sessionFactory = sessionFactory ?? { file, fileName in
+            try ProgressivePlaybackSession(
+                file: file,
+                fileName: fileName,
+                diagnosticRecorder: diagnosticRecorder,
+                diagnosticContext: context,
+                identityProvider: identityProvider
+            )
+        }
     }
 
     func start() async {
         await stop()
         phase = .preparing
+        let prepare = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .playbackPrepare,
+            level: .info,
+            payload: DiagnosticPayload(
+                sourceID: source.id,
+                container: DiagnosticContainerKind(fileName: item.name),
+                fileSize: item.size
+            ),
+            persistence: .essential
+        )
 
         do {
-            let file = try await source.open(file: item.path)
+            let open = DiagnosticOperation(
+                recorder: diagnosticRecorder,
+                parentContext: diagnosticContext,
+                name: .fileOpen,
+                level: .info,
+                payload: DiagnosticPayload(
+                    sourceID: source.id,
+                    container: DiagnosticContainerKind(fileName: item.name),
+                    fileSize: item.size
+                ),
+                persistence: .essential
+            )
+            let file: any MediaReadableFile
+            do {
+                file = try await source.open(file: item.path)
+            } catch {
+                finishPlaybackOperation(open, error: error, payload: DiagnosticPayload(
+                    sourceID: source.id,
+                    container: DiagnosticContainerKind(fileName: item.name),
+                    fileSize: item.size
+                ))
+                finishPlaybackOperation(prepare, error: error)
+                throw error
+            }
+            let fileID = identityProvider?.fileIdentity(
+                sourceID: file.identity.sourceID,
+                normalizedPath: file.identity.path,
+                size: file.identity.size,
+                modifiedAt: file.identity.modifiedAt
+            ).value
+            let payload = DiagnosticPayload(
+                sourceID: file.identity.sourceID,
+                fileID: fileID,
+                container: DiagnosticContainerKind(fileName: item.name),
+                fileSize: file.identity.size
+            )
+            open.end(outcome: .success, payload: payload)
 
             let session: any VideoPlaybackSession
             do {
@@ -45,6 +115,8 @@ final class VideoPlayerModel: ObservableObject {
                 session = try sessionFactory(file, item.name)
             } catch {
                 await file.close()
+                recordPlaybackFileClose(payload: payload)
+                finishPlaybackOperation(prepare, error: error, payload: payload)
                 throw error
             }
 
@@ -52,12 +124,23 @@ final class VideoPlayerModel: ObservableObject {
                 try Task.checkCancellation()
             } catch {
                 await session.stop()
+                finishPlaybackOperation(prepare, error: error, payload: payload)
                 throw error
             }
 
             playbackSession = session
+            activeDiagnosticPayload = payload
             player = session.player
             phase = .playing
+            prepare.end(outcome: .success, payload: payload)
+            diagnosticRecorder.record(.instant(
+                level: .info,
+                name: .playbackPlay,
+                context: diagnosticContext.child(),
+                outcome: .success,
+                payload: payload,
+                persistence: .essential
+            ))
             session.play()
         } catch is CancellationError {
             return
@@ -70,7 +153,76 @@ final class VideoPlayerModel: ObservableObject {
         let session = playbackSession
         playbackSession = nil
         player = nil
-        await session?.stop()
+        guard let session else { return }
+        let payload = activeDiagnosticPayload ?? DiagnosticPayload(sourceID: source.id)
+        activeDiagnosticPayload = nil
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .playbackStop,
+            level: .info,
+            payload: payload,
+            persistence: .essential
+        )
+        await session.stop()
+        operation.end(outcome: .success, payload: payload)
+    }
+
+    private func recordPlaybackFileClose(payload: DiagnosticPayload) {
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .fileClose,
+            level: .info,
+            payload: payload,
+            persistence: .essential
+        )
+        operation.end(outcome: .success, payload: payload)
+    }
+}
+
+private func finishPlaybackOperation(
+    _ operation: DiagnosticOperation,
+    error: Error,
+    payload: DiagnosticPayload = DiagnosticPayload()
+) {
+    if error is CancellationError {
+        operation.end(outcome: .cancelled, payload: payload)
+    } else {
+        operation.end(
+            outcome: .failure,
+            payload: payload,
+            error: playbackDiagnosticDescriptor(for: error)
+        )
+    }
+}
+
+private func playbackDiagnosticDescriptor(for error: Error) -> DiagnosticErrorDescriptor {
+    switch error {
+    case ProgressivePlaybackError.unsupportedContainer:
+        DiagnosticErrorDescriptor(code: .playerUnsupportedContainer)
+    case ProgressivePlaybackError.invalidLoadingRequest:
+        DiagnosticErrorDescriptor(code: .playerInvalidLoadingRequest)
+    case ProgressivePlaybackError.resourceLoaderClosed:
+        DiagnosticErrorDescriptor(code: .playerResourceLoaderClosed)
+    case MediaSourceError.notConnected:
+        DiagnosticErrorDescriptor(code: .sourceNotConnected, isRetryable: true)
+    case MediaSourceError.authenticationFailed:
+        DiagnosticErrorDescriptor(code: .sourceAuthenticationFailed)
+    case MediaSourceError.unreachable:
+        DiagnosticErrorDescriptor(code: .sourceUnreachable, isRetryable: true)
+    case MediaSourceError.notFound:
+        DiagnosticErrorDescriptor(code: .sourceNotFound)
+    case MediaSourceError.invalidRead:
+        DiagnosticErrorDescriptor(code: .sourceInvalidRead)
+    case MediaSourceError.readFailed:
+        DiagnosticErrorDescriptor(code: .sourceReadFailed, isRetryable: true)
+    case MediaSourceError.remoteFileChanged:
+        DiagnosticErrorDescriptor(code: .sourceRemoteFileChanged)
+    case MediaSourceError.unsupported:
+        DiagnosticErrorDescriptor(code: .sourceUnsupported)
+    default:
+        DiagnosticErrorDescriptor(code: .playerFailed)
     }
 }
 
