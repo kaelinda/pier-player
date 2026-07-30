@@ -1,3 +1,8 @@
 _ppff_configuration
 _ppff_license
+_ppff_session_close
+_ppff_session_media_info
+_ppff_session_open
+_ppff_session_stream_count
+_ppff_session_stream_info
 _ppff_version

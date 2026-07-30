@@ -108,17 +108,21 @@ for architecture in arm64 x86_64; do
         log "reusing FFmpeg libraries for $architecture"
     fi
 
-    bridge_object="$architecture_build/PierFFmpegVersion.o"
-    xcrun -sdk macosx clang \
-        -arch "$architecture" \
-        -mmacosx-version-min="$deployment_target" \
-        -std=c17 \
-        -fPIC \
-        -fvisibility=hidden \
-        -I"$native_dir/include" \
-        -I"$prefix/include" \
-        -c "$native_dir/src/PierFFmpegVersion.c" \
-        -o "$bridge_object"
+    bridge_objects=()
+    for source in "$native_dir"/src/*.c; do
+        object="$architecture_build/$(basename "${source%.c}").o"
+        xcrun -sdk macosx clang \
+            -arch "$architecture" \
+            -mmacosx-version-min="$deployment_target" \
+            -std=c17 \
+            -fPIC \
+            -fvisibility=hidden \
+            -I"$native_dir/include" \
+            -I"$prefix/include" \
+            -c "$source" \
+            -o "$object"
+        bridge_objects+=("$object")
+    done
 
     dylib="$architecture_build/$framework_name"
     xcrun -sdk macosx clang \
@@ -129,7 +133,7 @@ for architecture in arm64 x86_64; do
         -Wl,-compatibility_version,1.0.0 \
         -Wl,-current_version,"$version" \
         -Wl,-exported_symbols_list,"$native_dir/exports.txt" \
-        "$bridge_object" \
+        "${bridge_objects[@]}" \
         -Wl,-force_load,"$prefix/lib/libavformat.a" \
         -Wl,-force_load,"$prefix/lib/libavcodec.a" \
         -Wl,-force_load,"$prefix/lib/libswresample.a" \
