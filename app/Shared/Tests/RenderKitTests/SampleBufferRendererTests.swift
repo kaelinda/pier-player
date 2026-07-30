@@ -101,7 +101,7 @@ private actor CompletionFlag {
 }
 
 private func waitForCompletion(_ flag: CompletionFlag) async throws -> Bool {
-    let deadline = ProcessInfo.processInfo.systemUptime + 1
+    let deadline = ProcessInfo.processInfo.systemUptime + 5
     while ProcessInfo.processInfo.systemUptime < deadline {
         if await flag.isCompleted { return true }
         try await Task.sleep(for: .milliseconds(5))

@@ -153,6 +153,27 @@ final class AppModel: ObservableObject {
         sources.first { $0.id == id }
     }
 
+    var mediaLibrarySources: [MediaLibrarySource] {
+        sources.map { connected in
+            let source = connected.source
+            return MediaLibrarySource(
+                id: connected.id,
+                displayName: connected.displayName
+            ) { directory in
+                try await source.list(directory: directory)
+            }
+        }
+    }
+
+    var mediaLibrarySourceSummaries: [MediaLibrarySourceSummary] {
+        sources.map { connected in
+            MediaLibrarySourceSummary(
+                id: connected.id,
+                displayName: connected.displayName
+            )
+        }
+    }
+
     func smbURL(for sourceID: UUID, path: String) -> URL? {
         guard let connected = sources.first(where: { $0.id == sourceID }) else {
             return nil

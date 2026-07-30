@@ -1,41 +1,113 @@
 import SMBSourceKit
 import SwiftUI
 
+enum SidebarDestination: Hashable {
+    case library
+    case source(UUID)
+
+    func reconciled(with sourceIDs: [UUID]) -> SidebarDestination {
+        switch self {
+        case .library:
+            return .library
+        case let .source(sourceID):
+            return sourceIDs.contains(sourceID) ? self : .library
+        }
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isAddingSource = false
-    @State private var selectedSourceID: UUID?
+    @State private var selectedDestination: SidebarDestination? = .library
 
     var body: some View {
         NavigationSplitView {
             sourceSidebar
                 .navigationTitle("Pier Player")
+                .navigationSplitViewColumnWidth(min: 224, ideal: 252, max: 320)
         } detail: {
             detailContent
         }
-        .navigationSplitViewColumnWidth(min: 224, ideal: 252, max: 320)
         .sheet(isPresented: $isAddingSource) {
             AddSMBSourceView(model: model)
         }
         .onChange(of: model.sources.map(\.id), initial: true) { _, sourceIDs in
-            if let selectedSourceID, sourceIDs.contains(selectedSourceID) {
-                return
-            }
-            selectedSourceID = sourceIDs.first
+            selectedDestination = destination.reconciled(with: sourceIDs)
         }
     }
 
     private var sourceSidebar: some View {
-        List(selection: $selectedSourceID) {
-            Section("Network Sources") {
-                if model.isRestoring {
+        RootSidebarContent(
+            sources: model.sources,
+            isRestoring: model.isRestoring,
+            selection: $selectedDestination,
+            addSource: { isAddingSource = true },
+            removeSource: removeSource
+        )
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch destination {
+        case .library:
+            MediaLibraryView(
+                destination: destinationBinding,
+                addSource: { isAddingSource = true }
+            )
+        case let .source(sourceID) where model.source(id: sourceID) != nil:
+            NavigationStack {
+                SourceBrowserView(sourceID: sourceID, path: "/")
+            }
+            .id(sourceID)
+        case .source:
+            MediaLibraryView(
+                destination: destinationBinding,
+                addSource: { isAddingSource = true }
+            )
+        }
+    }
+
+    private var destination: SidebarDestination {
+        selectedDestination ?? .library
+    }
+
+    private var destinationBinding: Binding<SidebarDestination> {
+        Binding(
+            get: { destination },
+            set: { selectedDestination = $0 }
+        )
+    }
+
+    private func removeSource(_ id: UUID) {
+        Task {
+            await model.removeSource(id: id)
+        }
+    }
+}
+
+struct RootSidebarContent: View {
+    let sources: [AppModel.ConnectedSource]
+    let isRestoring: Bool
+    @Binding var selection: SidebarDestination?
+    let addSource: () -> Void
+    let removeSource: (UUID) -> Void
+
+    var body: some View {
+        List(selection: $selection) {
+            Section("Library") {
+                Label("Media Library", systemImage: "rectangle.stack.fill")
+                    .tag(SidebarDestination.library)
+            }
+
+            Section("File Sources") {
+                if isRestoring {
                     restoringRow
-                } else if model.sources.isEmpty {
+                } else if sources.isEmpty {
                     emptySourcesRow
                 } else {
-                    ForEach(model.sources) { source in
+                    ForEach(sources) { source in
                         SourceSidebarRow(source: source)
-                            .tag(source.id)
+                            .tag(SidebarDestination.source(source.id))
                             .contextMenu {
                                 Button(role: .destructive) {
                                     removeSource(source.id)
@@ -51,21 +123,7 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
         }
-    }
-
-    @ViewBuilder
-    private var detailContent: some View {
-        if let selectedSourceID,
-           model.source(id: selectedSourceID) != nil {
-            NavigationStack {
-                SourceBrowserView(sourceID: selectedSourceID, path: "/")
-            }
-            .id(selectedSourceID)
-        } else {
-            SourceWelcomeView {
-                isAddingSource = true
-            }
-        }
+        .accessibilityLabel("Pier Player Sidebar")
     }
 
     private var restoringRow: some View {
@@ -93,7 +151,7 @@ struct RootView: View {
     private var sidebarFooter: some View {
         HStack(spacing: 9) {
             Circle()
-                .fill(model.sources.isEmpty ? Color.secondary : Color.green)
+                .fill(sources.isEmpty ? Color.secondary : Color.green)
                 .frame(width: 7, height: 7)
 
             Text(sourceCountLabel)
@@ -103,7 +161,7 @@ struct RootView: View {
             Spacer()
 
             Button {
-                isAddingSource = true
+                addSource()
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 24, height: 24)
@@ -122,16 +180,10 @@ struct RootView: View {
     }
 
     private var sourceCountLabel: String {
-        switch model.sources.count {
+        switch sources.count {
         case 0: "Offline"
         case 1: "1 Source"
-        default: "\(model.sources.count) Sources"
-        }
-    }
-
-    private func removeSource(_ id: UUID) {
-        Task {
-            await model.removeSource(id: id)
+        default: "\(sources.count) Sources"
         }
     }
 }
@@ -163,23 +215,5 @@ private struct SourceSidebarRow: View {
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
-    }
-}
-
-private struct SourceWelcomeView: View {
-    let addSource: () -> Void
-
-    var body: some View {
-        ContentUnavailableView {
-            Label("Choose a Network Source", systemImage: "play.rectangle.on.rectangle")
-        } description: {
-            Text("Your SMB sources appear in the sidebar.")
-        } actions: {
-            Button(action: addSource) {
-                Label("Add Source", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .symbolRenderingMode(.hierarchical)
     }
 }

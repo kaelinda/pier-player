@@ -44,7 +44,7 @@ Evidence recorded on 2026-07-30 establishes the following:
 - The macOS UI hosts `AVSampleBufferDisplayLayer`, exposes playback, seek,
   volume, mute, full-screen, audio-track, and subtitle controls, and passes
   offscreen layout checks at 760 by 520 and 1180 by 760 points.
-- The repository gate passes 113 tests, Debug and Release builds, framework and
+- The repository gate passes 152 tests, Debug and Release builds, framework and
   fixture verification, two Release probes, and whitespace checks. The Release
   executable resolves PierFFmpeg through `@rpath` with `@loader_path` available.
 
