@@ -2,6 +2,19 @@ import AVFoundation
 import Foundation
 import MediaSourceKit
 
+@MainActor
+protocol VideoPlaybackSession: AnyObject {
+    var player: AVPlayer { get }
+
+    func play()
+    func stop() async
+}
+
+typealias VideoPlaybackSessionFactory = @MainActor (
+    any MediaReadableFile,
+    String
+) throws -> any VideoPlaybackSession
+
 enum ProgressivePlaybackError: Error, Equatable, LocalizedError, Sendable {
     case unsupportedContainer(String)
     case invalidLoadingRequest
@@ -199,7 +212,7 @@ final class ProgressiveMediaResourceLoader: NSObject,
 }
 
 @MainActor
-final class ProgressivePlaybackSession {
+final class ProgressivePlaybackSession: VideoPlaybackSession {
     let player: AVPlayer
     let asset: AVURLAsset
 
