@@ -52,8 +52,9 @@ struct MediaLibraryViewModelTests {
         #expect(!viewModel.isLoading)
     }
 
-    @Test func reloadPublishesFastSourceWhileSlowSourceIsRunning() async {
+    @Test func reloadPublishesFastSourceWhileSlowSourceIsRunning() async throws {
         let slowGate = SuspensionGate()
+        let completion = TaskCompletionProbe()
         let slow = MediaLibrarySource(id: UUID(), displayName: "Slow NAS") { path in
             #expect(path == "/")
             await slowGate.wait()
@@ -64,15 +65,35 @@ struct MediaLibraryViewModelTests {
 
         let reload = Task {
             await viewModel.reload(sources: [slow, fast])
+            await completion.markFinished()
         }
 
-        #expect(await eventually { await slowGate.hasWaiter })
-        #expect(await eventually {
+        let slowDidStart = await eventually { await slowGate.hasWaiter }
+        if !slowDidStart {
+            reload.cancel()
+            await slowGate.resume()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(slowDidStart)
+
+        let fastDidPublish = await eventually {
             viewModel.snapshot.items.map(\.media.path) == ["/fast.mp4"]
-        })
+        }
+        if !fastDidPublish {
+            reload.cancel()
+            await slowGate.resume()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(fastDidPublish)
         #expect(viewModel.isLoading)
 
         await slowGate.resume()
+        let reloadDidFinish = await eventually { await completion.didFinish }
+        if !reloadDidFinish {
+            reload.cancel()
+            await slowGate.resume()
+        }
+        try #require(reloadDidFinish)
         await reload.value
 
         #expect(
@@ -82,8 +103,9 @@ struct MediaLibraryViewModelTests {
         #expect(!viewModel.isLoading)
     }
 
-    @Test func reloadScansAtMostTwoSourcesConcurrently() async {
+    @Test func reloadScansAtMostTwoSourcesConcurrently() async throws {
         let gate = ConcurrencyGate()
+        let completion = TaskCompletionProbe()
         let sources = (0..<4).map { index in
             let id = UUID()
             return MediaLibrarySource(id: id, displayName: "NAS \(index)") { path in
@@ -96,17 +118,44 @@ struct MediaLibraryViewModelTests {
 
         let reload = Task {
             await viewModel.reload(sources: sources)
+            await completion.markFinished()
         }
 
-        #expect(await eventually { await gate.startedCount == 2 })
+        let firstWaveDidStart = await eventually { await gate.startedCount >= 2 }
+        if !firstWaveDidStart {
+            reload.cancel()
+            await gate.resumeAll()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(firstWaveDidStart)
+
         #expect(await gate.maximumActiveCount == 2)
         let firstWave = await gate.startedIDs
-        await gate.resume(id: firstWave[0])
+        if firstWave.count != 2 {
+            reload.cancel()
+            await gate.resumeAll()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(firstWave.count == 2)
+        let firstSourceID = try #require(firstWave.first)
+        await gate.resume(id: firstSourceID)
 
-        #expect(await eventually { await gate.startedCount == 3 })
+        let thirdSourceDidStart = await eventually { await gate.startedCount >= 3 }
+        if !thirdSourceDidStart {
+            reload.cancel()
+            await gate.resumeAll()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(thirdSourceDidStart)
         #expect(await gate.maximumActiveCount == 2)
 
         await gate.resumeAll()
+        let reloadDidFinish = await eventually { await completion.didFinish }
+        if !reloadDidFinish {
+            reload.cancel()
+            await gate.resumeAll()
+        }
+        try #require(reloadDidFinish)
         await reload.value
 
         #expect(viewModel.snapshot.items.count == 4)
@@ -114,8 +163,9 @@ struct MediaLibraryViewModelTests {
         #expect(!viewModel.isLoading)
     }
 
-    @Test func cancellingReloadStopsLoadingAndIgnoresLateResult() async {
+    @Test func cancellingReloadStopsLoadingAndIgnoresLateResult() async throws {
         let probe = CancellationProbe()
+        let completion = TaskCompletionProbe()
         let source = MediaLibrarySource(id: UUID(), displayName: "Slow NAS") { path in
             #expect(path == "/")
             return try await probe.list()
@@ -127,13 +177,24 @@ struct MediaLibraryViewModelTests {
 
         let reload = Task {
             await viewModel.reload(sources: [source])
+            await completion.markFinished()
         }
 
-        #expect(await eventually { await probe.hasStarted })
+        let sourceDidStart = await eventually { await probe.hasStarted }
+        if !sourceDidStart {
+            reload.cancel()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(sourceDidStart)
         #expect(viewModel.snapshot == MediaLibrarySnapshot())
         #expect(viewModel.isLoading)
 
         reload.cancel()
+        let reloadDidFinish = await eventually { await completion.didFinish }
+        if !reloadDidFinish {
+            reload.cancel()
+        }
+        try #require(reloadDidFinish)
         await reload.value
 
         #expect(await probe.didObserveCancellation)
@@ -141,8 +202,10 @@ struct MediaLibraryViewModelTests {
         #expect(!viewModel.isLoading)
     }
 
-    @Test func newerReloadWinsOverOlderLateResult() async {
+    @Test func newerReloadWinsOverOlderLateResult() async throws {
         let oldProbe = CancellationProbe()
+        let oldCompletion = TaskCompletionProbe()
+        let newCompletion = TaskCompletionProbe()
         let oldSource = MediaLibrarySource(id: UUID(), displayName: "Old NAS") { path in
             #expect(path == "/")
             return try await oldProbe.list()
@@ -157,30 +220,59 @@ struct MediaLibraryViewModelTests {
 
         let oldReload = Task {
             await viewModel.reload(sources: [oldSource])
+            await oldCompletion.markFinished()
         }
-        #expect(await eventually { await oldProbe.hasStarted })
+        let oldDidStart = await eventually { await oldProbe.hasStarted }
+        if !oldDidStart {
+            oldReload.cancel()
+            _ = await eventually { await oldCompletion.didFinish }
+        }
+        try #require(oldDidStart)
 
         let newReload = Task {
             await viewModel.reload(sources: [newSource])
+            await newCompletion.markFinished()
         }
-        #expect(await eventually {
+        let handoffDidStart = await eventually {
             let oldWasCancelled = await oldProbe.didObserveCancellation
             let newDidStart = await newGate.hasWaiter
             return oldWasCancelled && newDidStart
-        })
+        }
+        if !handoffDidStart {
+            oldReload.cancel()
+            newReload.cancel()
+            await newGate.resume()
+            _ = await eventually { await oldCompletion.didFinish }
+            _ = await eventually { await newCompletion.didFinish }
+        }
+        try #require(handoffDidStart)
 
+        let oldReloadDidFinish = await eventually { await oldCompletion.didFinish }
+        if !oldReloadDidFinish {
+            oldReload.cancel()
+            newReload.cancel()
+            await newGate.resume()
+            _ = await eventually { await newCompletion.didFinish }
+        }
+        try #require(oldReloadDidFinish)
         await oldReload.value
         #expect(viewModel.snapshot == MediaLibrarySnapshot())
         #expect(viewModel.isLoading)
 
         await newGate.resume()
+        let newReloadDidFinish = await eventually { await newCompletion.didFinish }
+        if !newReloadDidFinish {
+            newReload.cancel()
+            await newGate.resume()
+        }
+        try #require(newReloadDidFinish)
         await newReload.value
 
         #expect(viewModel.snapshot.items.map(\.media.path) == ["/new.mp4"])
         #expect(!viewModel.isLoading)
     }
 
-    @Test func newerReloadCancelsPriorScansBeforeStarting() async {
+    @Test func newerReloadCancelsPriorScansBeforeStarting() async throws {
         let probe = ReloadReplacementProbe()
         let oldSources = (0..<2).map { index in
             let id = UUID()
@@ -199,7 +291,14 @@ struct MediaLibraryViewModelTests {
             await viewModel.reload(sources: oldSources)
             await probe.markOldReloadReturned()
         }
-        #expect(await eventually { await probe.startedOldSourceCount == 2 })
+        let oldSourcesDidStart = await eventually {
+            await probe.startedOldSourceCount == 2
+        }
+        if !oldSourcesDidStart {
+            oldReload.cancel()
+            _ = await eventually { await probe.didReturnOldReload }
+        }
+        try #require(oldSourcesDidStart)
 
         let newReload = Task {
             await viewModel.reload(sources: [newSource])
@@ -212,14 +311,82 @@ struct MediaLibraryViewModelTests {
         if !replacementCompleted {
             oldReload.cancel()
             newReload.cancel()
+            _ = await eventually { await probe.didReturnOldReload }
+            _ = await eventually { await probe.didReturnNewReload }
         }
+        try #require(replacementCompleted)
         await oldReload.value
         await newReload.value
 
-        #expect(replacementCompleted)
         #expect(await probe.cancelledOldSourceCount == 2)
         #expect(await probe.didStartNewSource)
         #expect(await probe.didReturnNewReload)
+        #expect(await probe.maximumActiveCount <= 2)
+        #expect(viewModel.snapshot.items.map(\.media.path) == ["/new.mp4"])
+        #expect(!viewModel.isLoading)
+    }
+
+    @Test func replacementWaitsForNonCooperativePriorScans() async throws {
+        let gate = NonCooperativeGate()
+        let probe = NonCooperativeReplacementProbe()
+        let oldCompletion = TaskCompletionProbe()
+        let newCompletion = TaskCompletionProbe()
+        let oldSources = (0..<2).map { index in
+            let id = UUID()
+            return MediaLibrarySource(id: id, displayName: "Old NAS \(index)") { path in
+                #expect(path == "/")
+                return await probe.listOldSource(id: id, gate: gate)
+            }
+        }
+        let newSource = MediaLibrarySource(id: UUID(), displayName: "New NAS") { path in
+            #expect(path == "/")
+            return await probe.listNewSource()
+        }
+        let viewModel = MediaLibraryViewModel()
+
+        let oldReload = Task {
+            await viewModel.reload(sources: oldSources)
+            await oldCompletion.markFinished()
+        }
+        let oldSourcesDidStart = await eventually {
+            await probe.startedOldSourceCount == 2
+        }
+        if !oldSourcesDidStart {
+            oldReload.cancel()
+            await gate.resumeAll()
+            _ = await eventually { await oldCompletion.didFinish }
+        }
+        try #require(oldSourcesDidStart)
+
+        let newReload = Task {
+            await viewModel.reload(sources: [newSource])
+            await newCompletion.markFinished()
+        }
+
+        let newStartedBeforeRelease = await eventually(timeout: .milliseconds(100)) {
+            await probe.didStartNewSource
+        }
+        #expect(!newStartedBeforeRelease)
+        #expect(await probe.maximumActiveCount <= 2)
+
+        await gate.resumeAll()
+        let replacementDidFinish = await eventually {
+            let oldDidFinish = await oldCompletion.didFinish
+            let newDidFinish = await newCompletion.didFinish
+            return oldDidFinish && newDidFinish
+        }
+        if !replacementDidFinish {
+            oldReload.cancel()
+            newReload.cancel()
+            await gate.resumeAll()
+            _ = await eventually { await oldCompletion.didFinish }
+            _ = await eventually { await newCompletion.didFinish }
+        }
+        try #require(replacementDidFinish)
+        await oldReload.value
+        await newReload.value
+
+        #expect(await probe.didStartNewSource)
         #expect(await probe.maximumActiveCount <= 2)
         #expect(viewModel.snapshot.items.map(\.media.path) == ["/new.mp4"])
         #expect(!viewModel.isLoading)
@@ -247,16 +414,21 @@ struct MediaLibraryViewModelTests {
 
 private actor SuspensionGate {
     private var continuation: CheckedContinuation<Void, Never>?
+    private var isOpen = false
     private(set) var hasWaiter = false
 
     func wait() async {
         hasWaiter = true
+        if isOpen {
+            return
+        }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
     }
 
     func resume() {
+        isOpen = true
         continuation?.resume()
         continuation = nil
     }
@@ -372,6 +544,69 @@ private actor ReloadReplacementProbe {
 
     func markNewReloadReturned() {
         didReturnNewReload = true
+    }
+}
+
+private actor NonCooperativeGate {
+    private var isOpen = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func resumeAll() {
+        isOpen = true
+        let waiting = continuations
+        continuations.removeAll()
+        for continuation in waiting {
+            continuation.resume()
+        }
+    }
+}
+
+private actor NonCooperativeReplacementProbe {
+    private var activeCount = 0
+    private var startedOldSourceIDs: Set<UUID> = []
+    private(set) var maximumActiveCount = 0
+    private(set) var didStartNewSource = false
+
+    var startedOldSourceCount: Int {
+        startedOldSourceIDs.count
+    }
+
+    func listOldSource(
+        id: UUID,
+        gate: NonCooperativeGate
+    ) async -> [MediaSourceItem] {
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+        startedOldSourceIDs.insert(id)
+        defer { activeCount -= 1 }
+
+        await gate.wait()
+        return []
+    }
+
+    func listNewSource() -> [MediaSourceItem] {
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+        didStartNewSource = true
+        defer { activeCount -= 1 }
+        return [videoItem(path: "/new.mp4")]
+    }
+}
+
+private actor TaskCompletionProbe {
+    private(set) var didFinish = false
+
+    func markFinished() {
+        didFinish = true
     }
 }
 
