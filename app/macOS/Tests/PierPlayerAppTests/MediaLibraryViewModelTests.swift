@@ -142,27 +142,85 @@ struct MediaLibraryViewModelTests {
     }
 
     @Test func newerReloadWinsOverOlderLateResult() async {
-        let oldGate = SuspensionGate()
+        let oldProbe = CancellationProbe()
         let oldSource = MediaLibrarySource(id: UUID(), displayName: "Old NAS") { path in
             #expect(path == "/")
-            await oldGate.wait()
-            return [videoItem(path: "/old.mp4")]
+            return try await oldProbe.list()
         }
-        let newSource = source(named: "New NAS", videoPath: "/new.mp4")
+        let newGate = SuspensionGate()
+        let newSource = MediaLibrarySource(id: UUID(), displayName: "New NAS") { path in
+            #expect(path == "/")
+            await newGate.wait()
+            return [videoItem(path: "/new.mp4")]
+        }
         let viewModel = MediaLibraryViewModel()
 
         let oldReload = Task {
             await viewModel.reload(sources: [oldSource])
         }
-        #expect(await eventually { await oldGate.hasWaiter })
+        #expect(await eventually { await oldProbe.hasStarted })
 
-        await viewModel.reload(sources: [newSource])
+        let newReload = Task {
+            await viewModel.reload(sources: [newSource])
+        }
+        #expect(await eventually {
+            let oldWasCancelled = await oldProbe.didObserveCancellation
+            let newDidStart = await newGate.hasWaiter
+            return oldWasCancelled && newDidStart
+        })
+
+        await oldReload.value
+        #expect(viewModel.snapshot == MediaLibrarySnapshot())
+        #expect(viewModel.isLoading)
+
+        await newGate.resume()
+        await newReload.value
+
         #expect(viewModel.snapshot.items.map(\.media.path) == ["/new.mp4"])
         #expect(!viewModel.isLoading)
+    }
 
-        await oldGate.resume()
+    @Test func newerReloadCancelsPriorScansBeforeStarting() async {
+        let probe = ReloadReplacementProbe()
+        let oldSources = (0..<2).map { index in
+            let id = UUID()
+            return MediaLibrarySource(id: id, displayName: "Old NAS \(index)") { path in
+                #expect(path == "/")
+                return try await probe.listOldSource(id: id)
+            }
+        }
+        let newSource = MediaLibrarySource(id: UUID(), displayName: "New NAS") { path in
+            #expect(path == "/")
+            return await probe.listNewSource()
+        }
+        let viewModel = MediaLibraryViewModel()
+
+        let oldReload = Task {
+            await viewModel.reload(sources: oldSources)
+            await probe.markOldReloadReturned()
+        }
+        #expect(await eventually { await probe.startedOldSourceCount == 2 })
+
+        let newReload = Task {
+            await viewModel.reload(sources: [newSource])
+            await probe.markNewReloadReturned()
+        }
+        let replacementCompleted = await eventually {
+            await probe.replacementCompleted
+        }
+
+        if !replacementCompleted {
+            oldReload.cancel()
+            newReload.cancel()
+        }
         await oldReload.value
+        await newReload.value
 
+        #expect(replacementCompleted)
+        #expect(await probe.cancelledOldSourceCount == 2)
+        #expect(await probe.didStartNewSource)
+        #expect(await probe.didReturnNewReload)
+        #expect(await probe.maximumActiveCount <= 2)
         #expect(viewModel.snapshot.items.map(\.media.path) == ["/new.mp4"])
         #expect(!viewModel.isLoading)
     }
@@ -259,6 +317,61 @@ private actor CancellationProbe {
             return [videoItem(path: "/late.mp4")]
         }
         return []
+    }
+}
+
+private actor ReloadReplacementProbe {
+    private var activeCount = 0
+    private var startedOldSourceIDs: Set<UUID> = []
+    private var cancelledOldSourceIDs: Set<UUID> = []
+    private(set) var maximumActiveCount = 0
+    private(set) var didStartNewSource = false
+    private(set) var didReturnOldReload = false
+    private(set) var didReturnNewReload = false
+
+    var startedOldSourceCount: Int {
+        startedOldSourceIDs.count
+    }
+
+    var cancelledOldSourceCount: Int {
+        cancelledOldSourceIDs.count
+    }
+
+    var replacementCompleted: Bool {
+        cancelledOldSourceIDs.count == 2
+            && didReturnOldReload
+            && didReturnNewReload
+    }
+
+    func listOldSource(id: UUID) async throws -> [MediaSourceItem] {
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+        startedOldSourceIDs.insert(id)
+        defer { activeCount -= 1 }
+
+        do {
+            try await Task.sleep(for: .seconds(30))
+        } catch is CancellationError {
+            cancelledOldSourceIDs.insert(id)
+            throw CancellationError()
+        }
+        return []
+    }
+
+    func listNewSource() -> [MediaSourceItem] {
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+        didStartNewSource = true
+        defer { activeCount -= 1 }
+        return [videoItem(path: "/new.mp4")]
+    }
+
+    func markOldReloadReturned() {
+        didReturnOldReload = true
+    }
+
+    func markNewReloadReturned() {
+        didReturnNewReload = true
     }
 }
 

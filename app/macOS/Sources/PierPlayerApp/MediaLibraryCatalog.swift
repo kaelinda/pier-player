@@ -136,6 +136,7 @@ final class MediaLibraryViewModel: ObservableObject {
 
     private let scanner: MediaLibraryScanner
     private var reloadGeneration = 0
+    private var activeScanTask: Task<Void, Never>?
 
     init(
         scanner: MediaLibraryScanner = MediaLibraryScanner(),
@@ -153,14 +154,41 @@ final class MediaLibraryViewModel: ObservableObject {
 
         defer {
             if reloadGeneration == generation {
+                activeScanTask = nil
                 isLoading = false
             }
+        }
+
+        if let previousScanTask = activeScanTask {
+            previousScanTask.cancel()
+            await previousScanTask.value
+        }
+
+        guard reloadGeneration == generation else {
+            return
         }
 
         guard !sources.isEmpty, !Task.isCancelled else {
             return
         }
 
+        let scanTask = Task { [weak self] in
+            guard let self else { return }
+            await self.scan(sources: sources, generation: generation)
+        }
+        activeScanTask = scanTask
+
+        await withTaskCancellationHandler {
+            await scanTask.value
+        } onCancel: {
+            scanTask.cancel()
+        }
+    }
+
+    private func scan(
+        sources: [MediaLibrarySource],
+        generation: Int
+    ) async {
         let scanner = scanner
         await withTaskGroup(of: MediaLibraryScanResult?.self) { group in
             var nextSourceIndex = 0
