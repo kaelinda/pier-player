@@ -26,6 +26,10 @@ import Testing
     #expect(file.readByteCount == 0)
     #expect(coordinator.startedIdentity == file.identity)
 
+    let reopened = try await coordinator.reopen()
+    #expect(reopened.identity == file.identity)
+    #expect(source.openedPaths == [item.path, item.path])
+
     await model.stop()
     #expect(coordinator.stopCount == 1)
 }
@@ -105,6 +109,44 @@ import Testing
 }
 
 @MainActor
+@Test func modelDiscoversAndLoadsSameBasenameExternalSubtitles() async throws {
+    let subtitleBytes = Data(
+        "1\n00:00:00,200 --> 00:00:01,200\nExternal subtitle\n".utf8
+    )
+    let subtitleItem = MediaSourceItem(
+        name: "test.en.srt",
+        path: "/Movies/test.en.srt",
+        kind: .file,
+        size: Int64(subtitleBytes.count),
+        modifiedAt: nil
+    )
+    let mediaFile = ModelTestFile(size: 1_024)
+    let subtitleFile = ModelTestFile(
+        bytes: subtitleBytes,
+        path: subtitleItem.path
+    )
+    let source = ModelTestSource(
+        file: mediaFile,
+        directoryItems: [subtitleItem],
+        additionalFiles: [subtitleItem.path: subtitleFile]
+    )
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
+
+    await model.start()
+
+    #expect(source.listedPaths == ["/Movies"])
+    #expect(source.openedPaths == ["/Movies/test.mkv", subtitleItem.path])
+    #expect(subtitleFile.closeCount == 1)
+    await model.stop()
+}
+
+@MainActor
 func waitForModel(
     _ model: VideoPlayerModel,
     predicate: (PlaybackCoordinatorSnapshot) -> Bool
@@ -154,6 +196,7 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
 
     private struct State {
         var startedIdentity: MediaFileIdentity?
+        var reopenFile: MediaFileReopener?
         var stopCount = 0
         var seekPositions: [TimeInterval] = []
         var subtitleSelections: [Int?] = []
@@ -174,9 +217,20 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
         continuation.yield(snapshot)
     }
 
-    func start(file: any MediaReadableFile) async throws {
-        lock.withLock { state.startedIdentity = file.identity }
+    func start(
+        file: any MediaReadableFile,
+        reopenFile: @escaping MediaFileReopener
+    ) async throws {
+        lock.withLock {
+            state.startedIdentity = file.identity
+            state.reopenFile = reopenFile
+        }
         continuation.yield(snapshot(state: .playing))
+    }
+
+    func reopen() async throws -> any MediaReadableFile {
+        let reopenFile = try #require(lock.withLock { state.reopenFile })
+        return try await reopenFile()
     }
 
     func pause() async throws {}
@@ -193,6 +247,8 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
         lock.withLock { state.subtitleSelections.append(index) }
     }
 
+    func registerExternalSubtitles(_ subtitles: [ExternalPlaybackSubtitle]) async {}
+
     func stop() async {
         lock.withLock { state.stopCount += 1 }
         continuation.yield(.idle)
@@ -203,27 +259,41 @@ final class ModelTestSource: MediaSource, @unchecked Sendable {
     let id = UUID()
     let displayName = "Test Source"
     let file: ModelTestFile
+    let directoryItems: [MediaSourceItem]
+    let additionalFiles: [String: ModelTestFile]
     private let lock = NSLock()
     private var paths: [String] = []
+    private var directories: [String] = []
 
     var openedPaths: [String] { lock.withLock { paths } }
+    var listedPaths: [String] { lock.withLock { directories } }
 
-    init(file: ModelTestFile) {
+    init(
+        file: ModelTestFile,
+        directoryItems: [MediaSourceItem] = [],
+        additionalFiles: [String: ModelTestFile] = [:]
+    ) {
         self.file = file
+        self.directoryItems = directoryItems
+        self.additionalFiles = additionalFiles
     }
 
     func connect() async throws {}
     func disconnect() async {}
-    func list(directory path: String) async throws -> [MediaSourceItem] { [] }
+    func list(directory path: String) async throws -> [MediaSourceItem] {
+        lock.withLock { directories.append(path) }
+        return directoryItems
+    }
 
     func open(file path: String) async throws -> any MediaReadableFile {
         lock.withLock { paths.append(path) }
-        return file
+        return additionalFiles[path] ?? file
     }
 }
 
 final class ModelTestFile: MediaReadableFile, @unchecked Sendable {
     let identity: MediaFileIdentity
+    private let bytes: Data?
     private let lock = NSLock()
     private var bytesRead = 0
     private var closes = 0
@@ -231,17 +301,34 @@ final class ModelTestFile: MediaReadableFile, @unchecked Sendable {
     var readByteCount: Int { lock.withLock { bytesRead } }
     var closeCount: Int { lock.withLock { closes } }
 
-    init(size: Int64) {
+    init(size: Int64, path: String = "/Movies/test.mkv") {
+        bytes = nil
         identity = MediaFileIdentity(
             sourceID: UUID(),
-            path: "/Movies/test.mkv",
+            path: path,
             size: size,
+            modifiedAt: nil
+        )
+    }
+
+    init(bytes: Data, path: String) {
+        self.bytes = bytes
+        identity = MediaFileIdentity(
+            sourceID: UUID(),
+            path: path,
+            size: Int64(bytes.count),
             modifiedAt: nil
         )
     }
 
     func read(at offset: Int64, length: Int) async throws -> Data {
         lock.withLock { bytesRead += length }
+        if let bytes {
+            let start = Int(offset)
+            let end = min(start + length, bytes.count)
+            guard start >= 0, start < end else { return Data() }
+            return bytes.subdata(in: start..<end)
+        }
         return Data(repeating: 0, count: length)
     }
 

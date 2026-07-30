@@ -1,5 +1,8 @@
 import FFmpegKit
 import Foundation
+import MediaSourceKit
+
+public typealias MediaFileReopener = @Sendable () async throws -> any MediaReadableFile
 
 public struct PlaybackCoordinatorSnapshot: Equatable, Sendable {
     public let sessionID: UUID?
@@ -61,6 +64,7 @@ public struct PlaybackCoordinatorConfiguration: Sendable {
     public let startupAudioDuration: TimeInterval
     public let maximumRetryAttempts: Int
     public let maximumRetryDuration: TimeInterval
+    public let decodeConfiguration: FFmpegDecodeConfiguration
 
     public init(
         pageSize: Int,
@@ -71,7 +75,8 @@ public struct PlaybackCoordinatorConfiguration: Sendable {
         startupVideoDuration: TimeInterval,
         startupAudioDuration: TimeInterval,
         maximumRetryAttempts: Int,
-        maximumRetryDuration: TimeInterval
+        maximumRetryDuration: TimeInterval,
+        decodeConfiguration: FFmpegDecodeConfiguration = .default
     ) {
         self.pageSize = pageSize
         self.cacheCapacityBytes = cacheCapacityBytes
@@ -82,6 +87,7 @@ public struct PlaybackCoordinatorConfiguration: Sendable {
         self.startupAudioDuration = startupAudioDuration
         self.maximumRetryAttempts = maximumRetryAttempts
         self.maximumRetryDuration = maximumRetryDuration
+        self.decodeConfiguration = decodeConfiguration
     }
 
     public static let `default` = PlaybackCoordinatorConfiguration(

@@ -1,7 +1,7 @@
 # Generated Media Fixtures
 
-These files contain only a two-second FFmpeg `testsrc2` pattern, a generated
-1 kHz sine tone, and synthetic subtitle text. They contain no copyrighted media
+These files contain only short FFmpeg `testsrc2` patterns, generated 1 kHz sine
+tones, and synthetic subtitle text. They contain no copyrighted media
 or credentials.
 
 Regenerate them from `app/` with:

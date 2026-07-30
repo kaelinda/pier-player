@@ -34,6 +34,14 @@ ffmpeg "${common[@]}" \
     -c:a aac -b:a 96k -movflags +faststart \
     "$fixture_dir/video-h264-aac.mp4"
 
+ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i "$video_source" \
+    -f lavfi -i "sine=frequency=1000:sample_rate=48000:duration=0.5" \
+    -map_metadata -1 \
+    -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 24 -keyint_min 24 -sc_threshold 0 \
+    -c:a aac -b:a 96k \
+    "$fixture_dir/video-longer-than-audio.mkv"
+
 ffmpeg "${common[@]}" \
     -c:v libvpx-vp9 -deadline good -cpu-used 4 -row-mt 1 -pix_fmt yuv420p -g 24 \
     -c:a libopus -b:a 96k \
@@ -62,6 +70,7 @@ ffmpeg -hide_banner -loglevel error -y \
     shasum -a 256 \
         video-h264-aac.mkv \
         video-h264-aac.mp4 \
+        video-longer-than-audio.mkv \
         video-vp9-opus.webm \
         video-mpeg4-mp3.avi \
         video-mpeg2-ac3.ts \

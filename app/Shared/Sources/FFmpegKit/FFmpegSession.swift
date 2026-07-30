@@ -114,7 +114,8 @@ public final class FFmpegSession: @unchecked Sendable {
             var nativeError = PPFFError()
             let nativeConfiguration = PPFFDecodeConfiguration(
                 prefer_hardware: configuration.preferHardware ? 1 : 0,
-                force_hardware_open_failure: configuration.forceHardwareOpenFailure ? 1 : 0
+                force_hardware_open_failure: configuration.forceHardwareOpenFailure ? 1 : 0,
+                force_hardware_decode_failure: configuration.forceHardwareDecodeFailure ? 1 : 0
             )
             let result = ppff_session_prepare_decoders(
                 nativeSession,

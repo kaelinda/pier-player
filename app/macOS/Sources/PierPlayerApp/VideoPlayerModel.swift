@@ -3,17 +3,22 @@ import Foundation
 import MediaSourceKit
 import PlaybackCore
 import RenderKit
+import SubtitleKit
 import SwiftUI
 
 protocol PlaybackCoordinatorControlling: Sendable {
     var snapshots: AsyncStream<PlaybackCoordinatorSnapshot> { get }
 
-    func start(file: any MediaReadableFile) async throws
+    func start(
+        file: any MediaReadableFile,
+        reopenFile: @escaping MediaFileReopener
+    ) async throws
     func pause() async throws
     func resume() async throws
     func seek(to position: TimeInterval) async throws -> UInt64
     func selectAudioTrack(index: Int) async throws -> UInt64
     func selectSubtitleTrack(index: Int?) async throws
+    func registerExternalSubtitles(_ subtitles: [ExternalPlaybackSubtitle]) async
     func stop() async
 }
 
@@ -84,7 +89,13 @@ final class VideoPlayerModel: ObservableObject {
                 }
                 return
             }
-            try await coordinator.start(file: file)
+            try await coordinator.start(
+                file: file,
+                reopenFile: { [source, item] in
+                    try await source.open(file: item.path)
+                }
+            )
+            await discoverExternalSubtitles()
         } catch is CancellationError {
             await stop()
         } catch {
@@ -177,6 +188,40 @@ final class VideoPlayerModel: ObservableObject {
                 self?.receive(snapshot)
             }
         }
+    }
+
+    private func discoverExternalSubtitles() async {
+        let parent = (item.path as NSString).deletingLastPathComponent
+        let directory = parent.isEmpty ? "/" : parent
+        guard let items = try? await source.list(directory: directory),
+              hasStarted, !Task.isCancelled else {
+            return
+        }
+        let candidates = ExternalSubtitleDiscovery.discover(
+            videoPath: item.path,
+            among: items
+        )
+        var subtitles: [ExternalPlaybackSubtitle] = []
+        for candidate in candidates {
+            guard hasStarted, !Task.isCancelled else { return }
+            guard let result = try? await ExternalSubtitleDiscovery.load(
+                candidate,
+                from: source
+            ) else {
+                continue
+            }
+            subtitles.append(
+                ExternalPlaybackSubtitle(
+                    identifier: candidate.item.path,
+                    codecName: candidate.format.rawValue,
+                    language: candidate.language,
+                    title: candidate.item.name,
+                    cues: result.cues
+                )
+            )
+        }
+        guard hasStarted, !Task.isCancelled else { return }
+        await coordinator.registerExternalSubtitles(subtitles)
     }
 
     private func updateProgress() {

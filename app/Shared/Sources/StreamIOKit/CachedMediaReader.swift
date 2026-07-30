@@ -2,13 +2,19 @@ import Foundation
 import MediaSourceKit
 
 public actor CachedMediaReader {
+    private struct InFlightPage {
+        let id: UUID
+        let task: Task<Data, Error>
+    }
+
     public nonisolated let identity: MediaFileIdentity
     public private(set) var metrics = StreamMetrics()
 
     private let file: any MediaReadableFile
     private let cache: PageCache
     private let pageSize: Int
-    private var inFlightPages: [Int64: Task<Data, Error>] = [:]
+    private var inFlightPages: [Int64: InFlightPage] = [:]
+    private var readGeneration: UInt64 = 0
 
     public init(
         file: any MediaReadableFile,
@@ -54,9 +60,18 @@ public actor CachedMediaReader {
         await cache.removeAll()
     }
 
+    public func interruptPendingReads() {
+        readGeneration &+= 1
+        for page in inFlightPages.values {
+            page.task.cancel()
+        }
+        inFlightPages.removeAll()
+    }
+
     public func close() async {
-        for task in inFlightPages.values {
-            task.cancel()
+        readGeneration &+= 1
+        for page in inFlightPages.values {
+            page.task.cancel()
         }
         inFlightPages.removeAll()
         await cache.removeAll()
@@ -64,6 +79,7 @@ public actor CachedMediaReader {
     }
 
     private func loadPage(at pageOffset: Int64) async throws {
+        let generation = readGeneration
         let remaining = identity.size - pageOffset
         let expectedLength = Int(min(Int64(pageSize), remaining))
         guard expectedLength > 0 else { return }
@@ -72,23 +88,27 @@ public actor CachedMediaReader {
             return
         }
 
-        let task: Task<Data, Error>
+        let page: InFlightPage
         let ownsTask: Bool
         if let existing = inFlightPages[pageOffset] {
-            task = existing
+            page = existing
             ownsTask = false
         } else {
             let upstream = file
-            task = Task {
-                try await upstream.read(at: pageOffset, length: expectedLength)
-            }
-            inFlightPages[pageOffset] = task
+            page = InFlightPage(
+                id: UUID(),
+                task: Task {
+                    try await upstream.read(at: pageOffset, length: expectedLength)
+                }
+            )
+            inFlightPages[pageOffset] = page
             metrics.upstreamReads &+= 1
             ownsTask = true
         }
 
         do {
-            let data = try await task.value
+            let data = try await page.task.value
+            guard generation == readGeneration else { throw CancellationError() }
             guard data.count == expectedLength else {
                 throw StreamIOError.unexpectedShortRead(
                     offset: pageOffset,
@@ -99,13 +119,18 @@ public actor CachedMediaReader {
             try await cache.insert(page: data, at: pageOffset)
             if ownsTask {
                 metrics.upstreamBytes &+= UInt64(data.count)
-                inFlightPages[pageOffset] = nil
+                removeInFlightPage(at: pageOffset, id: page.id)
             }
         } catch {
             if ownsTask {
-                inFlightPages[pageOffset] = nil
+                removeInFlightPage(at: pageOffset, id: page.id)
             }
             throw error
         }
+    }
+
+    private func removeInFlightPage(at pageOffset: Int64, id: UUID) {
+        guard inFlightPages[pageOffset]?.id == id else { return }
+        inFlightPages[pageOffset] = nil
     }
 }

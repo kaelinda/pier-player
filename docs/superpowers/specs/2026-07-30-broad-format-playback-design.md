@@ -44,7 +44,7 @@ Evidence recorded on 2026-07-30 establishes the following:
 - The macOS UI hosts `AVSampleBufferDisplayLayer`, exposes playback, seek,
   volume, mute, full-screen, audio-track, and subtitle controls, and passes
   offscreen layout checks at 760 by 520 and 1180 by 760 points.
-- The repository gate passes 94 tests, Debug and Release builds, framework and
+- The repository gate passes 113 tests, Debug and Release builds, framework and
   fixture verification, two Release probes, and whitespace checks. The Release
   executable resolves PierFFmpeg through `@rpath` with `@loader_path` available.
 
@@ -52,11 +52,12 @@ The reference measurements and their limits are recorded in
 `app/docs/benchmarks/broad-format-reference.json`. The evidence does not yet
 establish HEVC, AV1, VP8, FLV, VOB, ASF, WMV, or every other enabled combination
 with dedicated fixtures. It also does not establish two-hour stability, remote
-SMB throughput, drift, or recovery behavior. The coordinator has bounded retry
-configuration but still needs a reconnectable source factory before interrupted
-SMB handles can be reopened. External subtitle parsing and same-basename
-discovery are tested independently; wiring sibling discovery into the active
-player session remains follow-up work.
+SMB throughput, drift, or recovery behavior. The coordinator now reopens an
+interrupted source with bounded attempts and elapsed time, rejects changed file
+identities, and resumes from the frozen timeline; these paths are covered with
+local deterministic files rather than a real NAS interruption. External
+subtitle parsing and same-basename discovery are wired into the active macOS
+player session and covered by tests.
 
 ## Product Scope
 

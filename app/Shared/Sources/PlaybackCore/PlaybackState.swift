@@ -4,6 +4,7 @@ public enum BufferingReason: String, Equatable, Codable, Sendable {
     case initial
     case seek
     case recovery
+    case underrun
 }
 
 public enum PlaybackState: Equatable, Sendable {

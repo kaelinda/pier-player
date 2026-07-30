@@ -99,7 +99,12 @@ public actor PlaybackSession {
     }
 
     @discardableResult
-    public func beginReconnection() throws -> PlaybackOperationToken {
+    public func beginReconnection(
+        at position: TimeInterval? = nil
+    ) throws -> PlaybackOperationToken {
+        if let position, (!position.isFinite || position < 0) {
+            throw PlaybackCommandError.invalidPosition(position)
+        }
         switch snapshot.state {
         case .playing, .paused, .buffering:
             break
@@ -111,7 +116,7 @@ public actor PlaybackSession {
         }
 
         let token = try nextGeneration(command: "beginReconnection")
-        update(state: .reconnecting)
+        update(state: .reconnecting, position: position)
         return token
     }
 
@@ -119,6 +124,19 @@ public actor PlaybackSession {
     public func connectionRecovered(token: PlaybackOperationToken) -> Bool {
         guard accepts(token), snapshot.state == .reconnecting else { return false }
         update(state: .buffering(.recovery))
+        return true
+    }
+
+    @discardableResult
+    public func beginRebuffering(
+        token: PlaybackOperationToken,
+        at position: TimeInterval
+    ) -> Bool {
+        guard position.isFinite, position >= 0,
+              accepts(token), snapshot.state == .playing else {
+            return false
+        }
+        update(state: .buffering(.underrun), position: position)
         return true
     }
 

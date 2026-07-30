@@ -70,6 +70,8 @@ int ppff_video_decoder_open(
     }
 
     AVStream *stream = session->format_context->streams[session->default_video_stream];
+    session->force_hardware_decode_failure = configuration.force_hardware_decode_failure;
+    session->hardware_decode_failure_injected = 0;
     const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
     if (codec == NULL) {
         ppff_error_set(error, AVERROR_DECODER_NOT_FOUND, "find video decoder");
@@ -149,6 +151,39 @@ int ppff_video_decoder_open(
     }
     session->video_decoder_mode = PPFF_DECODER_MODE_SOFTWARE;
     return 0;
+}
+
+int ppff_video_decoder_fallback_to_software(PPFFSession *session, PPFFError *error) {
+    if (session == NULL || session->video_decoder_mode != PPFF_DECODER_MODE_VIDEOTOOLBOX ||
+        session->software_fallback_count != 0 || session->default_video_stream < 0) {
+        ppff_error_set(error, AVERROR(EINVAL), "fallback video decoder");
+        return AVERROR(EINVAL);
+    }
+
+    AVStream *stream = session->format_context->streams[session->default_video_stream];
+    const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (codec == NULL) {
+        ppff_error_set(error, AVERROR_DECODER_NOT_FOUND, "find software video decoder");
+        return AVERROR_DECODER_NOT_FOUND;
+    }
+    int64_t resume_time_us = session->last_video_pts_us == INT64_MIN
+        ? 0
+        : session->last_video_pts_us;
+
+    ppff_video_decoder_reset(session);
+    int result = ppff_video_decoder_allocate(session, codec);
+    if (result >= 0) {
+        result = avcodec_open2(session->video_decoder, codec, NULL);
+    }
+    if (result < 0) {
+        ppff_error_set(error, result, "open fallback video decoder");
+        ppff_video_decoder_reset(session);
+        return result;
+    }
+
+    session->video_decoder_mode = PPFF_DECODER_MODE_SOFTWARE;
+    session->software_fallback_count = 1;
+    return ppff_session_seek(session, resume_time_us, error);
 }
 
 static int64_t ppff_video_duration_us(PPFFSession *session, AVFrame *frame) {
@@ -287,7 +322,15 @@ int ppff_video_receive(PPFFSession *session, PPFFSample *sample, PPFFError *erro
         return AVERROR(EAGAIN);
     }
     av_frame_unref(session->video_frame);
-    int result = avcodec_receive_frame(session->video_decoder, session->video_frame);
+    int result;
+    if (session->video_decoder_mode == PPFF_DECODER_MODE_VIDEOTOOLBOX &&
+        session->force_hardware_decode_failure &&
+        !session->hardware_decode_failure_injected) {
+        session->hardware_decode_failure_injected = 1;
+        result = AVERROR_EXTERNAL;
+    } else {
+        result = avcodec_receive_frame(session->video_decoder, session->video_frame);
+    }
     if (result == AVERROR_EOF) {
         session->video_drained = 1;
         return result;

@@ -5,11 +5,17 @@ import PierFFmpeg
 public protocol FFmpegByteSource: AnyObject, Sendable {
     var size: Int64 { get }
     func read(at offset: Int64, length: Int) throws -> Data
+    func cancel()
+}
+
+public extension FFmpegByteSource {
+    func cancel() {}
 }
 
 final class FFmpegIOBridge: @unchecked Sendable {
     private let source: any FFmpegByteSource
-    private let lock = NSLock()
+    private let stateLock = NSLock()
+    private let ioLock = NSLock()
     private let deadline: TimeInterval
     private var position: Int64 = 0
     private var remainingBytes: Int64
@@ -32,53 +38,67 @@ final class FFmpegIOBridge: @unchecked Sendable {
     }
 
     func cancel() {
-        lock.withLock {
+        let shouldCancel = stateLock.withLock {
+            guard !isCancelled else { return false }
             isCancelled = true
+            return true
         }
+        if shouldCancel { source.cancel() }
     }
 
     func finishProbing() {
-        lock.withLock {
+        stateLock.withLock {
             isProbing = false
             remainingBytes = Int64.max
         }
     }
 
     fileprivate func read(into buffer: UnsafeMutablePointer<UInt8>, length: Int) -> Int32 {
-        lock.lock()
-        defer { lock.unlock() }
+        ioLock.lock()
+        defer { ioLock.unlock() }
 
-        guard !shouldInterruptLocked(), !isProbing || remainingBytes > 0 else {
-            return Int32(PPFF_ERROR_IO)
+        let request = stateLock.withLock { () -> (offset: Int64, length: Int)? in
+            guard !shouldInterruptLocked(), !isProbing || remainingBytes > 0,
+                  position < source.size else {
+                return nil
+            }
+            let available = source.size - position
+            let permittedLength = isProbing ? remainingBytes : Int64(length)
+            let readLength = Int(min(Int64(length), available, permittedLength))
+            guard readLength > 0 else { return nil }
+            return (position, readLength)
         }
-        guard position < source.size else { return Int32(PPFF_ERROR_EOF) }
-
-        let available = source.size - position
-        let permittedLength = isProbing ? remainingBytes : Int64(length)
-        let readLength = Int(min(Int64(length), available, permittedLength))
-        guard readLength > 0 else { return Int32(PPFF_ERROR_EOF) }
+        guard let request else {
+            return interrupted() != 0 ? Int32(PPFF_ERROR_IO) : Int32(PPFF_ERROR_EOF)
+        }
 
         do {
-            let data = try source.read(at: position, length: readLength)
+            let data = try source.read(at: request.offset, length: request.length)
             guard !data.isEmpty else { return Int32(PPFF_ERROR_EOF) }
-            let copiedCount = min(data.count, readLength)
-            data.withUnsafeBytes { bytes in
-                if let baseAddress = bytes.baseAddress {
-                    memcpy(buffer, baseAddress, copiedCount)
+            return stateLock.withLock {
+                guard !shouldInterruptLocked(), position == request.offset else {
+                    return Int32(PPFF_ERROR_IO)
                 }
+                let copiedCount = min(data.count, request.length)
+                data.withUnsafeBytes { bytes in
+                    if let baseAddress = bytes.baseAddress {
+                        memcpy(buffer, baseAddress, copiedCount)
+                    }
+                }
+                position += Int64(copiedCount)
+                if isProbing {
+                    remainingBytes -= Int64(copiedCount)
+                }
+                return Int32(copiedCount)
             }
-            position += Int64(copiedCount)
-            if isProbing {
-                remainingBytes -= Int64(copiedCount)
-            }
-            return Int32(copiedCount)
         } catch {
             return Int32(PPFF_ERROR_IO)
         }
     }
 
     fileprivate func seek(offset: Int64, whence: Int32) -> Int64 {
-        lock.withLock {
+        ioLock.withLock {
+            stateLock.withLock {
             if (whence & Int32(PPFF_AVSEEK_SIZE)) != 0 {
                 return source.size
             }
@@ -103,11 +123,12 @@ final class FFmpegIOBridge: @unchecked Sendable {
             }
             position = target
             return target
+            }
         }
     }
 
     func interrupted() -> Int32 {
-        lock.withLock {
+        stateLock.withLock {
             shouldInterruptLocked() ? 1 : 0
         }
     }

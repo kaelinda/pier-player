@@ -17,6 +17,7 @@ public final class SampleBufferRenderer {
     )
     private var lastVideoEndTime: TimeInterval = 0
     private var lastAudioEndTime: TimeInterval = 0
+    private var capacityWaiters: [RenderLane: [UUID: RendererReadinessWaiter]] = [:]
 
     public init(maximumPendingDuration: TimeInterval = 2) {
         precondition(maximumPendingDuration.isFinite && maximumPendingDuration > 0)
@@ -110,6 +111,7 @@ public final class SampleBufferRenderer {
         } else {
             synchronizer.rate = 1
         }
+        resumeCapacityWaiters()
     }
 
     public func pause() {
@@ -141,6 +143,7 @@ public final class SampleBufferRenderer {
         audioRenderer.flush()
         lastVideoEndTime = time
         lastAudioEndTime = time
+        resumeCapacityWaiters()
     }
 
     public func requestMediaDataWhenReady(
@@ -159,8 +162,42 @@ public final class SampleBufferRenderer {
         renderer(for: lane).isReadyForMoreMediaData
     }
 
-    public func waitUntilReady(for lane: RenderLane) async throws {
-        if isReady(for: lane) { return }
+    public func waitUntilReady(
+        for lane: RenderLane,
+        requiredDuration: TimeInterval
+    ) async throws {
+        guard requiredDuration.isFinite, requiredDuration > 0 else {
+            throw CancellationError()
+        }
+        if !hasDurationCapacity(for: lane, requiredDuration: requiredDuration) {
+            let rate = TimeInterval(synchronizer.rate)
+            if rate > 0 {
+                let pending = pendingDuration(for: lane)
+                let delay = max(
+                    0.001,
+                    (pending + requiredDuration - maximumPendingDuration) / rate
+                )
+                try await Task.sleep(for: .seconds(delay))
+                return
+            }
+            let id = UUID()
+            let waiter = RendererReadinessWaiter()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    capacityWaiters[lane, default: [:]][id] = waiter
+                    waiter.install(continuation)
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    self?.cancelCapacityWaiter(id: id, lane: lane)
+                }
+            }
+            try Task.checkCancellation()
+            return
+        }
+        if isReady(for: lane) {
+            return
+        }
         let waiter = RendererReadinessWaiter()
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -194,7 +231,38 @@ public final class SampleBufferRenderer {
         let duration = CMSampleBufferGetDuration(sample).seconds
         guard duration.isFinite, duration > 0 else { return false }
         let pendingDuration = max(0, lastEndTime - timelineTime)
-        return pendingDuration + duration <= maximumPendingDuration
+        return pendingDuration == 0 ||
+            pendingDuration + duration <= maximumPendingDuration
+    }
+
+    private func hasDurationCapacity(
+        for lane: RenderLane,
+        requiredDuration: TimeInterval
+    ) -> Bool {
+        let pendingDuration = pendingDuration(for: lane)
+        return pendingDuration == 0 ||
+            pendingDuration + requiredDuration <= maximumPendingDuration
+    }
+
+    private func pendingDuration(for lane: RenderLane) -> TimeInterval {
+        let lastEndTime = lane == .video ? lastVideoEndTime : lastAudioEndTime
+        return max(0, lastEndTime - timelineTime)
+    }
+
+    private func resumeCapacityWaiters() {
+        let waiters = capacityWaiters.values.flatMap(\.values)
+        capacityWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func cancelCapacityWaiter(id: UUID, lane: RenderLane) {
+        let waiter = capacityWaiters[lane]?.removeValue(forKey: id)
+        if capacityWaiters[lane]?.isEmpty == true {
+            capacityWaiters[lane] = nil
+        }
+        waiter?.resume()
     }
 
     private func endTime(of sample: CMSampleBuffer) -> TimeInterval {

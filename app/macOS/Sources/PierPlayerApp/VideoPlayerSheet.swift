@@ -140,6 +140,7 @@ struct VideoPlayerSheet: View {
         case .buffering(.initial): "Buffering"
         case .buffering(.seek): "Seeking"
         case .buffering(.recovery): "Recovering"
+        case .buffering(.underrun): "Buffering"
         case .playing: "Playing"
         case .paused: "Paused"
         case .reconnecting: "Reconnecting"

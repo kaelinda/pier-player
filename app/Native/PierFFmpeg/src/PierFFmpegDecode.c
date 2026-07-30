@@ -264,6 +264,14 @@ int ppff_session_read_next(
         if (video_result < 0 &&
             video_result != AVERROR(EAGAIN) &&
             video_result != AVERROR_EOF) {
+            if (session->video_decoder_mode == PPFF_DECODER_MODE_VIDEOTOOLBOX &&
+                session->software_fallback_count == 0) {
+                int fallback_result = ppff_video_decoder_fallback_to_software(session, error);
+                if (fallback_result >= 0) {
+                    continue;
+                }
+                return fallback_result;
+            }
             return video_result;
         }
 

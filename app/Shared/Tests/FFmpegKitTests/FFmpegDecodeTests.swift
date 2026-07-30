@@ -72,6 +72,21 @@ import Testing
     #expect(try firstVideoSample(from: fallbackSession) != nil)
 }
 
+@Test func runtimeHardwareDecodeFailureFallsBackOnceAndContinues() throws {
+    let data = try Data(contentsOf: decodeFixtureURL("video-h264-aac.mkv"))
+    let session = try FFmpegSession(data: data)
+    try session.prepareForDecoding(
+        configuration: FFmpegDecodeConfiguration(forceHardwareDecodeFailure: true)
+    )
+    let openingStatus = try session.videoDecoderStatus()
+    #expect(openingStatus.mode == .videoToolbox)
+
+    #expect(try firstVideoSample(from: session) != nil)
+    let fallbackStatus = try session.videoDecoderStatus()
+    #expect(fallbackStatus.mode == .software)
+    #expect(fallbackStatus.softwareFallbackCount == 1)
+}
+
 @Test func cancellationAndClosePreventFurtherDecodeOutput() throws {
     let data = try Data(contentsOf: decodeFixtureURL("video-h264-aac.mkv"))
 
@@ -88,6 +103,33 @@ import Testing
     #expect(throws: FFmpegError.sessionClosed) {
         _ = try closedSession.readNextSample()
     }
+}
+
+@Test func cancellationInterruptsBlockedCustomAVIORead() async throws {
+    let data = try Data(contentsOf: decodeFixtureURL("video-h264-aac.mkv"))
+    let source = CancellableDecodeSource(data: data)
+    let session = try FFmpegSession(source: source)
+    try session.prepareForDecoding()
+    source.blockFutureReads()
+
+    let decodeTask = Task.detached {
+        while try session.readNextSample() != nil {}
+    }
+    #expect(source.waitUntilReadBlocks(timeout: 1))
+
+    let cancellation = CompletionSignal()
+    let cancelTask = Task.detached {
+        session.cancel()
+        cancellation.complete()
+    }
+    let completedPromptly = await waitForCompletion(cancellation, timeout: 0.2)
+    #expect(completedPromptly)
+
+    if !completedPromptly {
+        source.cancel()
+    }
+    await cancelTask.value
+    _ = try? await decodeTask.value
 }
 
 @Test func embeddedTextSubtitleProducesTimedDecodeEvent() throws {
@@ -138,4 +180,84 @@ private func decodeFixtureURL(_ fileName: String) -> URL {
         .deletingLastPathComponent()
         .appendingPathComponent("Fixtures")
         .appendingPathComponent(fileName)
+}
+
+private enum CancellableDecodeSourceError: Error {
+    case cancelled
+}
+
+private final class CancellableDecodeSource: FFmpegByteSource, @unchecked Sendable {
+    let size: Int64
+
+    private let data: Data
+    private let condition = NSCondition()
+    private var shouldBlock = false
+    private var isBlocked = false
+    private var isCancelled = false
+
+    init(data: Data) {
+        self.data = data
+        self.size = Int64(data.count)
+    }
+
+    func read(at offset: Int64, length: Int) throws -> Data {
+        try condition.withLock {
+            if shouldBlock {
+                isBlocked = true
+                condition.broadcast()
+                while !isCancelled {
+                    condition.wait()
+                }
+                throw CancellableDecodeSourceError.cancelled
+            }
+            let start = Int(offset)
+            let end = min(start + length, data.count)
+            guard start >= 0, start < end else { return Data() }
+            return data.subdata(in: start..<end)
+        }
+    }
+
+    func blockFutureReads() {
+        condition.withLock {
+            shouldBlock = true
+        }
+    }
+
+    func waitUntilReadBlocks(timeout: TimeInterval) -> Bool {
+        condition.withLock {
+            let deadline = Date(timeIntervalSinceNow: timeout)
+            while !isBlocked && condition.wait(until: deadline) {}
+            return isBlocked
+        }
+    }
+
+    func cancel() {
+        condition.withLock {
+            isCancelled = true
+            condition.broadcast()
+        }
+    }
+}
+
+private final class CompletionSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+
+    var isCompleted: Bool { lock.withLock { completed } }
+
+    func complete() {
+        lock.withLock { completed = true }
+    }
+}
+
+private func waitForCompletion(
+    _ signal: CompletionSignal,
+    timeout: TimeInterval
+) async -> Bool {
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
+    while ProcessInfo.processInfo.systemUptime < deadline {
+        if signal.isCompleted { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return signal.isCompleted
 }

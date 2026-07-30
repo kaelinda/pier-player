@@ -84,6 +84,7 @@ typedef enum PPFFDecoderMode {
 typedef struct PPFFDecodeConfiguration {
     int prefer_hardware;
     int force_hardware_open_failure;
+    int force_hardware_decode_failure;
 } PPFFDecodeConfiguration;
 
 typedef struct PPFFDecoderStatus {

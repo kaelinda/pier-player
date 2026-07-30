@@ -29,6 +29,8 @@ struct PPFFSession {
     PPFFDecoderMode video_decoder_mode;
     int hardware_attempted;
     int software_fallback_count;
+    int force_hardware_decode_failure;
+    int hardware_decode_failure_injected;
     int decode_prepared;
     int demux_eof;
     int video_drain_sent;
@@ -51,6 +53,7 @@ int ppff_video_decoder_open(
     PPFFDecodeConfiguration configuration,
     PPFFError *error
 );
+int ppff_video_decoder_fallback_to_software(PPFFSession *session, PPFFError *error);
 int ppff_audio_decoder_open(PPFFSession *session, PPFFError *error);
 int ppff_subtitle_decoder_open(PPFFSession *session, PPFFError *error);
 int ppff_video_receive(PPFFSession *session, PPFFSample *sample, PPFFError *error);

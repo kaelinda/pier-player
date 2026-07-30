@@ -111,6 +111,7 @@ let package = Package(
                 "FFmpegKit",
                 "RenderKit",
                 "SMBSourceKit",
+                "SubtitleKit",
             ],
             path: "macOS/Sources/PierPlayerApp"
         ),
@@ -148,7 +149,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PlaybackCoreTests",
-            dependencies: ["PlaybackCore", "MediaSourceKit", "RenderKit"],
+            dependencies: ["PlaybackCore", "MediaSourceKit", "RenderKit", "SubtitleKit"],
             path: "Shared/Tests/PlaybackCoreTests"
         ),
         .testTarget(

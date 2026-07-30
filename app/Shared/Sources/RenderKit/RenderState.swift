@@ -19,7 +19,7 @@ public struct RenderState: Equatable, Sendable {
     }
 }
 
-public enum RenderLane: Sendable {
+public enum RenderLane: Hashable, Sendable {
     case video
     case audio
 }

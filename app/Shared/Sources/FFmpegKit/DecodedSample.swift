@@ -10,13 +10,16 @@ public enum VideoDecoderMode: String, Codable, Equatable, Sendable {
 public struct FFmpegDecodeConfiguration: Equatable, Sendable {
     public let preferHardware: Bool
     public let forceHardwareOpenFailure: Bool
+    public let forceHardwareDecodeFailure: Bool
 
     public init(
         preferHardware: Bool = true,
-        forceHardwareOpenFailure: Bool = false
+        forceHardwareOpenFailure: Bool = false,
+        forceHardwareDecodeFailure: Bool = false
     ) {
         self.preferHardware = preferHardware
         self.forceHardwareOpenFailure = forceHardwareOpenFailure
+        self.forceHardwareDecodeFailure = forceHardwareDecodeFailure
     }
 
     public static let `default` = FFmpegDecodeConfiguration()

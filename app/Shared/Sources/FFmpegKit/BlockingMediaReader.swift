@@ -3,6 +3,7 @@ import StreamIOKit
 
 public enum BlockingMediaReaderError: Error, Equatable, Sendable {
     case timedOut
+    case interrupted
     case closed
 }
 
@@ -56,8 +57,9 @@ public final class BlockingMediaReader: FFmpegByteSource, @unchecked Sendable {
 
     private let reader: CachedMediaReader
     private let timeout: TimeInterval
-    private let lock = NSLock()
+    private let condition = NSCondition()
     private var pendingReads: [ReadKey: PendingRead] = [:]
+    private var interruptionsInProgress = 0
     private var isClosed = false
     private var closeTask: Task<Void, Never>?
 
@@ -70,7 +72,10 @@ public final class BlockingMediaReader: FFmpegByteSource, @unchecked Sendable {
 
     public func read(at offset: Int64, length: Int) throws -> Data {
         let key = ReadKey(offset: offset, length: length)
-        let operation = try lock.withLock { () throws -> PendingRead in
+        let operation = try condition.withLock { () throws -> PendingRead in
+            while interruptionsInProgress > 0 && !isClosed {
+                condition.wait()
+            }
             guard !isClosed else { throw BlockingMediaReaderError.closed }
             if let pending = pendingReads[key] {
                 return pending
@@ -102,9 +107,10 @@ public final class BlockingMediaReader: FFmpegByteSource, @unchecked Sendable {
     }
 
     public func close() {
-        let operations: [PendingRead] = lock.withLock {
+        let operations: [PendingRead] = condition.withLock {
             guard !isClosed else { return [] }
             isClosed = true
+            condition.broadcast()
             let operations = Array(pendingReads.values)
             pendingReads.removeAll()
             closeTask = Task { [reader] in
@@ -117,14 +123,37 @@ public final class BlockingMediaReader: FFmpegByteSource, @unchecked Sendable {
         }
     }
 
+    public func cancel() {
+        close()
+    }
+
+    public func interruptPendingReads() async {
+        let operations: [PendingRead] = condition.withLock {
+            interruptionsInProgress += 1
+            let operations = Array(pendingReads.values)
+            pendingReads.removeAll()
+            return operations
+        }
+        for operation in operations {
+            operation.cancel(with: .interrupted)
+        }
+        await reader.interruptPendingReads()
+        condition.withLock {
+            interruptionsInProgress -= 1
+            if interruptionsInProgress == 0 {
+                condition.broadcast()
+            }
+        }
+    }
+
     public func closeAndWait() async {
         close()
-        let task = lock.withLock { closeTask }
+        let task = condition.withLock { closeTask }
         await task?.value
     }
 
     private func remove(_ operation: PendingRead, for key: ReadKey) {
-        lock.withLock {
+        condition.withLock {
             guard pendingReads[key] === operation else { return }
             pendingReads[key] = nil
         }
