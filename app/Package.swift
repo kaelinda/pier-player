@@ -16,6 +16,7 @@ let package = Package(
         .library(name: "SMBSourceKit", targets: ["SMBSourceKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
+        .executable(name: "DiagnosticsReport", targets: ["DiagnosticsReport"]),
     ],
     targets: [
         .target(
@@ -93,6 +94,11 @@ let package = Package(
                 "StreamIOKit",
             ],
             path: "Tools/SMBProbe"
+        ),
+        .executableTarget(
+            name: "DiagnosticsReport",
+            dependencies: ["DiagnosticsKit"],
+            path: "Tools/DiagnosticsReport"
         ),
         .testTarget(
             name: "DiagnosticsKitTests",
