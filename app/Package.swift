@@ -13,10 +13,15 @@ let package = Package(
         .library(name: "PlaybackCore", targets: ["PlaybackCore"]),
         .library(name: "PlaybackTelemetry", targets: ["PlaybackTelemetry"]),
         .library(name: "SMBSourceKit", targets: ["SMBSourceKit"]),
+        .library(name: "FFmpegKit", targets: ["FFmpegKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
     ],
     targets: [
+        .binaryTarget(
+            name: "PierFFmpeg",
+            path: "Vendor/FFmpeg/PierFFmpeg.xcframework"
+        ),
         .target(
             name: "CLibSMB2",
             path: "Vendor/libsmb2",
@@ -66,6 +71,11 @@ let package = Package(
             name: "PlaybackTelemetry",
             path: "Shared/Sources/PlaybackTelemetry"
         ),
+        .target(
+            name: "FFmpegKit",
+            dependencies: ["PierFFmpeg"],
+            path: "Shared/Sources/FFmpegKit"
+        ),
         .executableTarget(
             name: "PierPlayerApp",
             dependencies: [
@@ -110,6 +120,11 @@ let package = Package(
             name: "PlaybackTelemetryTests",
             dependencies: ["PlaybackTelemetry"],
             path: "Shared/Tests/PlaybackTelemetryTests"
+        ),
+        .testTarget(
+            name: "FFmpegKitTests",
+            dependencies: ["FFmpegKit"],
+            path: "Shared/Tests/FFmpegKitTests"
         ),
         .testTarget(
             name: "PierPlayerAppTests",

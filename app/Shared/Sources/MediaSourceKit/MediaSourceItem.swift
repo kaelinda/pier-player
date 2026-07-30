@@ -35,6 +35,7 @@ public struct MediaSourceItem: Hashable, Codable, Sendable, Identifiable {
     }
 
     public static let supportedVideoExtensions: Set<String> = [
-        "mkv", "mp4", "m4v", "mov",
+        "mkv", "webm", "mp4", "mov", "m4v", "avi", "flv", "ts", "m2ts",
+        "mts", "mpeg", "mpg", "vob", "ogv", "3gp", "asf", "wmv",
     ]
 }
