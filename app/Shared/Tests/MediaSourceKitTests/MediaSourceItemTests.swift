@@ -46,6 +46,24 @@ import Testing
     #expect(!item.isSupportedVideo)
 }
 
+@Test func commonVideoContainerExtensionsAreRecognized() {
+    let supportedExtensions = [
+        "mkv", "webm", "mp4", "mov", "m4v", "avi", "flv", "ts", "m2ts",
+        "mts", "mpeg", "mpg", "vob", "ogv", "3gp", "asf", "wmv",
+    ]
+
+    for fileExtension in supportedExtensions {
+        let item = MediaSourceItem(
+            name: "Feature.\(fileExtension.uppercased())",
+            path: "Movies/Feature.\(fileExtension.uppercased())",
+            kind: .file,
+            size: 1_000,
+            modifiedAt: nil
+        )
+        #expect(item.isSupportedVideo, "Expected .\(fileExtension) to be recognized")
+    }
+}
+
 @Test func identityChangesWhenRemoteMetadataChanges() {
     let sourceID = UUID()
     let original = MediaFileIdentity(

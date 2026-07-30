@@ -135,7 +135,12 @@ public actor PlaybackSession {
     }
 
     @discardableResult
-    public func beginReconnection() throws -> PlaybackOperationToken {
+    public func beginReconnection(
+        at position: TimeInterval? = nil
+    ) throws -> PlaybackOperationToken {
+        if let position, (!position.isFinite || position < 0) {
+            throw PlaybackCommandError.invalidPosition(position)
+        }
         switch snapshot.state {
         case .playing, .paused, .buffering:
             break
@@ -154,7 +159,8 @@ public actor PlaybackSession {
         update(
             name: .playbackStall,
             generation: token.generation,
-            state: .reconnecting
+            state: .reconnecting,
+            position: position
         )
         return token
     }
@@ -166,6 +172,19 @@ public actor PlaybackSession {
             return false
         }
         update(name: .playbackRecover, state: .buffering(.recovery))
+        return true
+    }
+
+    @discardableResult
+    public func beginRebuffering(
+        token: PlaybackOperationToken,
+        at position: TimeInterval
+    ) -> Bool {
+        guard position.isFinite, position >= 0,
+              accepts(token), snapshot.state == .playing else {
+            return false
+        }
+        update(name: .playbackStall, state: .buffering(.underrun), position: position)
         return true
     }
 
@@ -187,6 +206,21 @@ public actor PlaybackSession {
             outcome: .failure,
             error: DiagnosticErrorDescriptor(code: .playerFailed)
         )
+    }
+
+    @discardableResult
+    public func playbackEnded(
+        token: PlaybackOperationToken,
+        position: TimeInterval
+    ) -> Bool {
+        guard accepts(token) else { return false }
+        update(
+            name: .playbackEnded,
+            state: .ended,
+            intendsToPlay: false,
+            position: position
+        )
+        return true
     }
 
     private func accepts(_ token: PlaybackOperationToken) -> Bool {
@@ -281,6 +315,7 @@ private extension PlaybackState {
         case .buffering(.initial): .bufferingInitial
         case .buffering(.seek): .bufferingSeek
         case .buffering(.recovery): .bufferingRecovery
+        case .buffering(.underrun): .bufferingUnderrun
         case .playing: .playing
         case .paused: .paused
         case .reconnecting: .reconnecting

@@ -122,6 +122,7 @@ public enum DiagnosticPlaybackState: String, Codable, Equatable, Sendable {
     case bufferingInitial = "buffering_initial"
     case bufferingSeek = "buffering_seek"
     case bufferingRecovery = "buffering_recovery"
+    case bufferingUnderrun = "buffering_underrun"
     case preparing
     case ready
     case playing

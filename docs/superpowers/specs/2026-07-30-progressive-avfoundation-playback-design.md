@@ -1,7 +1,12 @@
 # Progressive AVFoundation Playback Design
 
 **Date:** 2026-07-30
-**Status:** Approved for implementation by automatic-execution request
+**Status:** Superseded by the completed broad-format FFmpeg playback pipeline
+
+This document records the temporary AVFoundation bridge that landed on `main`.
+The bridge implementation was removed when the broad-format pipeline was merged
+because the latter streams MP4, M4V, MOV, MKV, and the wider supported format
+matrix through one owned playback path.
 
 ## Purpose
 

@@ -88,14 +88,30 @@ import Testing
     _ = await session.mediaOpened(token: opening)
     _ = await session.bufferingCompleted(token: opening)
 
-    let reconnect = try await session.beginReconnection()
+    let reconnect = try await session.beginReconnection(at: 42)
 
     #expect(reconnect.generation == opening.generation + 1)
     #expect(await session.snapshot.state == .reconnecting)
+    #expect(await session.snapshot.position == 42)
     #expect(!(await session.mediaOpened(token: opening)))
     #expect(await session.connectionRecovered(token: reconnect))
     #expect(await session.snapshot.state == .buffering(.recovery))
     #expect(await session.bufferingCompleted(token: reconnect))
+    #expect(await session.snapshot.state == .playing)
+}
+
+@Test func underrunBuffersWithoutInvalidatingActiveGeneration() async throws {
+    let session = PlaybackSession()
+    let token = try await session.open()
+    _ = await session.connectionEstablished(token: token)
+    _ = await session.mediaOpened(token: token)
+    _ = await session.bufferingCompleted(token: token)
+
+    #expect(await session.beginRebuffering(token: token, at: 0.5))
+    #expect(await session.snapshot.generation == token.generation)
+    #expect(await session.snapshot.state == .buffering(.underrun))
+    #expect(await session.snapshot.position == 0.5)
+    #expect(await session.bufferingCompleted(token: token))
     #expect(await session.snapshot.state == .playing)
 }
 
@@ -191,6 +207,25 @@ import Testing
     ).lowercased()
     #expect(!encoded.contains("private.example"))
     #expect(!encoded.contains("customer"))
+}
+
+@Test func underrunAndEndRecordDistinctPlaybackStates() async throws {
+    let recorder = PlaybackRecordingDiagnosticRecorder()
+    let session = PlaybackSession(diagnosticRecorder: recorder)
+    let token = try await session.open()
+    _ = await session.connectionEstablished(token: token)
+    _ = await session.mediaOpened(token: token)
+    _ = await session.bufferingCompleted(token: token)
+
+    #expect(await session.beginRebuffering(token: token, at: 0.5))
+    _ = await session.bufferingCompleted(token: token)
+    #expect(await session.playbackEnded(token: token, position: 2))
+
+    let stalled = try #require(recorder.snapshot.last { $0.name == .playbackStall })
+    #expect(stalled.payload.newPlaybackState == .bufferingUnderrun)
+    let ended = try #require(recorder.snapshot.last { $0.name == .playbackEnded })
+    #expect(ended.payload.newPlaybackState == .ended)
+    #expect(ended.payload.playbackPositionSeconds == 2)
 }
 
 private final class PlaybackRecordingDiagnosticRecorder: DiagnosticRecording, @unchecked Sendable {

@@ -1,0 +1,7 @@
+1
+00:00:00,250 --> 00:00:01,000
+Pier Player subtitle fixture
+
+2
+00:00:01,100 --> 00:00:01,850
+Second generated cue

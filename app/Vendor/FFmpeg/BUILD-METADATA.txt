@@ -1,0 +1,7 @@
+FFMPEG_VERSION=8.1.2
+FFMPEG_SOURCE_URL=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+FFMPEG_SOURCE_SHA256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+MACOS_DEPLOYMENT_TARGET=14.0
+ARCHITECTURES=arm64 x86_64
+X86_64_EXTRA_FLAGS=--disable-x86asm
+CONFIGURE_FLAGS=--disable-autodetect --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-avfilter --disable-network --disable-encoders --disable-muxers --disable-filters --disable-devices --enable-pic --enable-static --disable-shared --enable-zlib --enable-bzlib --enable-videotoolbox --enable-audiotoolbox
