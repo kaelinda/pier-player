@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "SMBSourceKit", targets: ["SMBSourceKit"]),
         .library(name: "FFmpegKit", targets: ["FFmpegKit"]),
         .library(name: "RenderKit", targets: ["RenderKit"]),
+        .library(name: "SubtitleKit", targets: ["SubtitleKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
     ],
@@ -87,6 +88,11 @@ let package = Package(
                 .linkedFramework("CoreVideo"),
             ]
         ),
+        .target(
+            name: "SubtitleKit",
+            dependencies: ["MediaSourceKit"],
+            path: "Shared/Sources/SubtitleKit"
+        ),
         .executableTarget(
             name: "PierPlayerApp",
             dependencies: [
@@ -141,6 +147,11 @@ let package = Package(
             name: "RenderKitTests",
             dependencies: ["RenderKit", "FFmpegKit"],
             path: "Shared/Tests/RenderKitTests"
+        ),
+        .testTarget(
+            name: "SubtitleKitTests",
+            dependencies: ["SubtitleKit", "MediaSourceKit"],
+            path: "Shared/Tests/SubtitleKitTests"
         ),
         .testTarget(
             name: "PierPlayerAppTests",

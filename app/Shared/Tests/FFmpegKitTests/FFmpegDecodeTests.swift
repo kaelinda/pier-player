@@ -90,6 +90,39 @@ import Testing
     }
 }
 
+@Test func embeddedTextSubtitleProducesTimedDecodeEvent() throws {
+    let data = try Data(contentsOf: decodeFixtureURL("video-h264-aac-srt.mkv"))
+    let session = try FFmpegSession(data: data)
+    let metadata = try session.metadata()
+    let subtitleTrack = try #require(metadata.tracks.first { $0.kind == .subtitle })
+    #expect(subtitleTrack.codecName == "subrip")
+
+    try session.prepareForDecoding()
+    var subtitle: DecodedSubtitleSample?
+    while let sample = try session.readNextSample() {
+        if case let .subtitle(value) = sample {
+            subtitle = value
+            break
+        }
+    }
+
+    let decoded = try #require(subtitle)
+    #expect(decoded.text.contains("Pier Player subtitle fixture"))
+    #expect(decoded.presentationTime >= 0.2)
+    #expect(decoded.duration > 0)
+
+    let offSession = try FFmpegSession(data: data)
+    try offSession.prepareForDecoding()
+    try offSession.selectSubtitleTrack(index: nil)
+    var emittedSubtitle = false
+    while let sample = try offSession.readNextSample() {
+        if case .subtitle = sample {
+            emittedSubtitle = true
+        }
+    }
+    #expect(!emittedSubtitle)
+}
+
 private func firstVideoSample(from session: FFmpegSession) throws -> DecodedVideoSample? {
     while let sample = try session.readNextSample() {
         if case let .video(video) = sample {

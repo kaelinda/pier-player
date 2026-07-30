@@ -49,6 +49,14 @@ ffmpeg "${common[@]}" \
     -c:a ac3 -b:a 192k -f mpegts \
     "$fixture_dir/video-mpeg2-ac3.ts"
 
+ffmpeg -hide_banner -loglevel error -y \
+    -i "$fixture_dir/video-h264-aac.mkv" \
+    -i "$fixture_dir/video-h264-aac.en.srt" \
+    -map 0:v -map 0:a -map 1:0 \
+    -c copy -c:s srt \
+    -metadata:s:s:0 language=eng -disposition:s:0 default \
+    "$fixture_dir/video-h264-aac-srt.mkv"
+
 (
     cd "$fixture_dir"
     shasum -a 256 \
@@ -57,6 +65,7 @@ ffmpeg "${common[@]}" \
         video-vp9-opus.webm \
         video-mpeg4-mp3.avi \
         video-mpeg2-ac3.ts \
+        video-h264-aac-srt.mkv \
         video-h264-aac.en.srt \
         video-h264-aac.ass \
         > SHA256SUMS

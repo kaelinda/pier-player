@@ -14,6 +14,7 @@ void ppff_decode_destroy(PPFFSession *session) {
     av_frame_free(&session->audio_frame);
     avcodec_free_context(&session->video_decoder);
     avcodec_free_context(&session->audio_decoder);
+    avcodec_free_context(&session->subtitle_decoder);
     av_buffer_unref(&session->hardware_device_context);
     sws_freeContext(session->scale_context);
     session->scale_context = NULL;
@@ -58,6 +59,11 @@ int ppff_session_prepare_decoders(
         ppff_decode_destroy(session);
         return result;
     }
+    result = ppff_subtitle_decoder_open(session, error);
+    if (result < 0) {
+        ppff_decode_destroy(session);
+        return result;
+    }
     session->decode_prepared = 1;
     return 0;
 }
@@ -68,6 +74,9 @@ static void ppff_reset_after_seek(PPFFSession *session, int64_t target_us) {
     }
     if (session->audio_decoder != NULL) {
         avcodec_flush_buffers(session->audio_decoder);
+    }
+    if (session->subtitle_decoder != NULL) {
+        avcodec_flush_buffers(session->subtitle_decoder);
     }
     if (session->resample_context != NULL) {
         swr_close(session->resample_context);
@@ -165,7 +174,25 @@ int ppff_session_select_subtitle(
         ppff_error_set(error, AVERROR(EINVAL), "select subtitle stream");
         return AVERROR(EINVAL);
     }
+    if (stream_index == session->default_subtitle_stream) {
+        return 0;
+    }
+
+    int previous_stream = session->default_subtitle_stream;
+    avcodec_free_context(&session->subtitle_decoder);
     session->default_subtitle_stream = stream_index;
+    int result = ppff_subtitle_decoder_open(session, error);
+    if (result < 0) {
+        PPFFError selection_error = error != NULL ? *error : (PPFFError){0};
+        avcodec_free_context(&session->subtitle_decoder);
+        session->default_subtitle_stream = previous_stream;
+        PPFFError recovery_error;
+        ppff_subtitle_decoder_open(session, &recovery_error);
+        if (error != NULL) {
+            *error = selection_error;
+        }
+        return result;
+    }
     return 0;
 }
 
@@ -288,6 +315,25 @@ int ppff_session_read_next(
             decoder = session->video_decoder;
         } else if (session->packet->stream_index == session->default_audio_stream) {
             decoder = session->audio_decoder;
+        } else if (session->packet->stream_index == session->default_subtitle_stream) {
+            int subtitle_result = ppff_subtitle_decode_packet(
+                session,
+                session->packet,
+                sample,
+                error
+            );
+            av_packet_unref(session->packet);
+            if (subtitle_result < 0) {
+                return subtitle_result;
+            }
+            if (subtitle_result > 0) {
+                if (session->seek_in_progress &&
+                    sample->presentation_time_us < session->seek_target_us) {
+                    ppff_sample_release(sample);
+                    continue;
+                }
+                return subtitle_result;
+            }
         }
         if (decoder == NULL) {
             continue;
@@ -310,5 +356,6 @@ void ppff_sample_release(PPFFSample *sample) {
         CVPixelBufferRelease(sample->video_buffer);
     }
     free(sample->audio_data);
+    free(sample->subtitle_text);
     memset(sample, 0, sizeof(PPFFSample));
 }

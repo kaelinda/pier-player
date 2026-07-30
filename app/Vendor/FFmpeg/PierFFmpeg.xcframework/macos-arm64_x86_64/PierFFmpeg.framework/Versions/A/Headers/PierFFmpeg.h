@@ -103,6 +103,8 @@ typedef struct PPFFSample {
     int audio_sample_count;
     int audio_sample_rate;
     int audio_channel_count;
+    char *subtitle_text;
+    int subtitle_text_length;
 } PPFFSample;
 
 enum {

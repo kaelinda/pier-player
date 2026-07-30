@@ -23,6 +23,7 @@ assert_media() {
     local name="$1"
     local expected_video="$2"
     local expected_audio="$3"
+    local expected_subtitle="${4:-}"
     local file="$fixture_dir/$name"
     [[ -f "$file" ]] || fail "missing fixture: $name"
 
@@ -36,10 +37,13 @@ assert_media() {
 
     local video
     local audio
+    local subtitle
     video="$(jq -r '.streams[] | select(.codec_type == "video") | .codec_name' <<<"$metadata" | head -n 1)"
     audio="$(jq -r '.streams[] | select(.codec_type == "audio") | .codec_name' <<<"$metadata" | head -n 1)"
+    subtitle="$(jq -r '.streams[] | select(.codec_type == "subtitle") | .codec_name' <<<"$metadata" | head -n 1)"
     [[ "$video" == "$expected_video" ]] || fail "$name video codec: expected $expected_video, got $video"
     [[ "$audio" == "$expected_audio" ]] || fail "$name audio codec: expected $expected_audio, got $audio"
+    [[ "$subtitle" == "$expected_subtitle" ]] || fail "$name subtitle codec: expected $expected_subtitle, got $subtitle"
 }
 
 assert_media video-h264-aac.mkv h264 aac
@@ -47,6 +51,7 @@ assert_media video-h264-aac.mp4 h264 aac
 assert_media video-vp9-opus.webm vp9 opus
 assert_media video-mpeg4-mp3.avi mpeg4 mp3
 assert_media video-mpeg2-ac3.ts mpeg2video ac3
+assert_media video-h264-aac-srt.mkv h264 aac subrip
 
 for subtitle in video-h264-aac.en.srt video-h264-aac.ass; do
     [[ -s "$fixture_dir/$subtitle" ]] || fail "missing subtitle fixture: $subtitle"

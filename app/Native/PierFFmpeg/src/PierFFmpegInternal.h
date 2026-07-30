@@ -18,6 +18,7 @@ struct PPFFSession {
     int default_subtitle_stream;
     AVCodecContext *video_decoder;
     AVCodecContext *audio_decoder;
+    AVCodecContext *subtitle_decoder;
     AVBufferRef *hardware_device_context;
     enum AVPixelFormat hardware_pixel_format;
     struct SwsContext *scale_context;
@@ -51,7 +52,14 @@ int ppff_video_decoder_open(
     PPFFError *error
 );
 int ppff_audio_decoder_open(PPFFSession *session, PPFFError *error);
+int ppff_subtitle_decoder_open(PPFFSession *session, PPFFError *error);
 int ppff_video_receive(PPFFSession *session, PPFFSample *sample, PPFFError *error);
 int ppff_audio_receive(PPFFSession *session, PPFFSample *sample, PPFFError *error);
+int ppff_subtitle_decode_packet(
+    PPFFSession *session,
+    const AVPacket *packet,
+    PPFFSample *sample,
+    PPFFError *error
+);
 
 #endif

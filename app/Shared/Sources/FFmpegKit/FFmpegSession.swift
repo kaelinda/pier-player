@@ -208,6 +208,28 @@ public final class FFmpegSession: @unchecked Sendable {
                         generation: generation
                     )
                 )
+            case 3:
+                guard let subtitleText = nativeSample.subtitle_text,
+                      nativeSample.subtitle_text_length > 0 else {
+                    throw FFmpegError.native(code: -1, message: "missing decoded subtitle text")
+                }
+                let text = String(
+                    decoding: UnsafeBufferPointer(
+                        start: UnsafeRawPointer(subtitleText)
+                            .assumingMemoryBound(to: UInt8.self),
+                        count: Int(nativeSample.subtitle_text_length)
+                    ),
+                    as: UTF8.self
+                )
+                return .subtitle(
+                    DecodedSubtitleSample(
+                        text: Self.normalizedSubtitleText(text),
+                        presentationTime: presentationTime,
+                        duration: duration,
+                        streamIndex: Int(nativeSample.stream_index),
+                        generation: generation
+                    )
+                )
             default:
                 throw FFmpegError.native(code: -1, message: "unknown decoded sample kind")
             }
@@ -307,6 +329,22 @@ public final class FFmpegSession: @unchecked Sendable {
         case 2: .software
         default: .none
         }
+    }
+
+    private static func normalizedSubtitleText(_ text: String) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\\N", with: "\n")
+            .replacingOccurrences(of: "\\n", with: "\n")
+        guard let expression = try? NSRegularExpression(
+            pattern: "\\{[^}]*\\}|<[^>]+>"
+        ) else {
+            return normalized
+        }
+        return expression.stringByReplacingMatches(
+            in: normalized,
+            range: NSRange(normalized.startIndex..<normalized.endIndex, in: normalized),
+            withTemplate: ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func track(from info: inout PPFFStreamInfo) -> MediaTrack {
