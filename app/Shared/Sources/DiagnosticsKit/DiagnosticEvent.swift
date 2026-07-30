@@ -135,6 +135,15 @@ public enum DiagnosticErrorCode: String, Codable, Equatable, Sendable {
     case diagnosticsIntegrityFailed = "diagnostics_integrity_failed"
 }
 
+public enum DiagnosticIncidentKind: String, Codable, Equatable, Hashable, Sendable {
+    case playbackFailure = "playback_failure"
+    case sourceFailure = "source_failure"
+    case unexpectedEndOfFile = "unexpected_end_of_file"
+    case stall
+    case eventLoss = "event_loss"
+    case unclosedResource = "unclosed_resource"
+}
+
 public struct DiagnosticErrorDescriptor: Codable, Equatable, Sendable {
     public let code: DiagnosticErrorCode
     public let isRetryable: Bool
@@ -162,6 +171,9 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
     public let offset: Int64?
     public let requestedLength: Int?
     public let actualLength: Int?
+    public let droppedEssentialEvents: UInt64?
+    public let droppedDetailedEvents: UInt64?
+    public let incidentKind: DiagnosticIncidentKind?
     public let error: DiagnosticErrorDescriptor?
 
     public init(
@@ -172,6 +184,9 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         offset: Int64? = nil,
         requestedLength: Int? = nil,
         actualLength: Int? = nil,
+        droppedEssentialEvents: UInt64? = nil,
+        droppedDetailedEvents: UInt64? = nil,
+        incidentKind: DiagnosticIncidentKind? = nil,
         error: DiagnosticErrorDescriptor? = nil
     ) {
         self.sourceID = sourceID
@@ -181,6 +196,9 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         self.offset = offset
         self.requestedLength = requestedLength
         self.actualLength = actualLength
+        self.droppedEssentialEvents = droppedEssentialEvents
+        self.droppedDetailedEvents = droppedDetailedEvents
+        self.incidentKind = incidentKind
         self.error = error
     }
 }
@@ -242,6 +260,32 @@ public struct DiagnosticEvent: Codable, Equatable, Sendable {
             payload: payload,
             persistence: persistence
         )
+    }
+
+    public var incidentKind: DiagnosticIncidentKind? {
+        switch name {
+        case .playbackFailed:
+            .playbackFailure
+        case .playbackStall:
+            .stall
+        case .eventsDropped:
+            .eventLoss
+        case .fileClose where outcome == .failure:
+            .unclosedResource
+        case .smbConnect, .smbRead:
+            switch payload.error?.code {
+            case .sourceUnreachable, .sourceReadFailed:
+                .sourceFailure
+            case .streamUnexpectedShortRead:
+                .unexpectedEndOfFile
+            default:
+                nil
+            }
+        case .resourceRead where payload.error?.code == .streamUnexpectedShortRead:
+            .unexpectedEndOfFile
+        default:
+            nil
+        }
     }
 }
 

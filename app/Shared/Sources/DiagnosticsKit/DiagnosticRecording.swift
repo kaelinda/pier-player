@@ -84,6 +84,13 @@ public final class DiagnosticEmitter: DiagnosticRecording, @unchecked Sendable {
         return result
     }
 
+    func assignSequence(to event: DiagnosticEvent) -> DiagnosticEvent {
+        lock.lock()
+        defer { lock.unlock() }
+        nextSequence &+= 1
+        return event.withSequence(nextSequence)
+    }
+
     public func finish() {
         essentialContinuation.finish()
         detailedContinuation.finish()
