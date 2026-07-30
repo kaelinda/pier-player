@@ -149,9 +149,9 @@ final class MediaLibraryViewModel: ObservableObject {
     func reload(sources: [MediaLibrarySource]) async {
         reloadGeneration += 1
         let generation = reloadGeneration
-        if sources.isEmpty {
-            snapshot = MediaLibrarySnapshot()
-        }
+        let connectedSourceIDs = Set(sources.map(\.id))
+        snapshot.items.removeAll { !connectedSourceIDs.contains($0.sourceID) }
+        snapshot.failures.removeAll { !connectedSourceIDs.contains($0.sourceID) }
         isLoading = true
 
         defer {

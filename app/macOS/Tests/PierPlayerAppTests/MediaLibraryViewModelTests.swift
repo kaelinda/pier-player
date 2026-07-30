@@ -55,9 +55,14 @@ struct MediaLibraryViewModelTests {
     @Test func reloadKeepsExistingSnapshotUntilFirstSourceResult() async throws {
         let gate = SuspensionGate()
         let completion = TaskCompletionProbe()
-        let initialItem = libraryItem(sourceName: "Existing NAS", path: "/existing.mp4")
+        let sourceID = UUID()
+        let initialItem = libraryItem(
+            sourceID: sourceID,
+            sourceName: "Existing NAS",
+            path: "/existing.mp4"
+        )
         let initialSnapshot = MediaLibrarySnapshot(items: [initialItem])
-        let source = MediaLibrarySource(id: UUID(), displayName: "Refreshing NAS") { path in
+        let source = MediaLibrarySource(id: sourceID, displayName: "Refreshing NAS") { path in
             #expect(path == "/")
             await gate.wait()
             return [videoItem(path: "/refreshed.mp4")]
@@ -92,16 +97,84 @@ struct MediaLibraryViewModelTests {
         #expect(!viewModel.isLoading)
     }
 
+    @Test func reloadImmediatelyRemovesDisconnectedSourceContent() async throws {
+        let retainedSourceID = UUID()
+        let removedSourceID = UUID()
+        let gate = SuspensionGate()
+        let completion = TaskCompletionProbe()
+        let retainedItem = MediaLibraryItem(
+            sourceID: retainedSourceID,
+            sourceName: "Retained NAS",
+            media: videoItem(path: "/retained.mp4")
+        )
+        let removedItem = MediaLibraryItem(
+            sourceID: removedSourceID,
+            sourceName: "Removed NAS",
+            media: videoItem(path: "/removed.mp4")
+        )
+        let remainingSource = MediaLibrarySource(
+            id: retainedSourceID,
+            displayName: "Retained NAS"
+        ) { path in
+            #expect(path == "/")
+            await gate.wait()
+            return [videoItem(path: "/refreshed.mp4")]
+        }
+        let viewModel = MediaLibraryViewModel(
+            initialSnapshot: MediaLibrarySnapshot(
+                items: [retainedItem, removedItem],
+                failures: [
+                    MediaLibraryScanFailure(
+                        sourceID: retainedSourceID,
+                        sourceName: "Retained NAS"
+                    ),
+                    MediaLibraryScanFailure(
+                        sourceID: removedSourceID,
+                        sourceName: "Removed NAS"
+                    ),
+                ]
+            )
+        )
+
+        let reload = Task {
+            await viewModel.reload(sources: [remainingSource])
+            await completion.markFinished()
+        }
+
+        let sourceDidStart = await eventually { await gate.hasWaiter }
+        if !sourceDidStart {
+            reload.cancel()
+            await gate.resume()
+            _ = await eventually { await completion.didFinish }
+        }
+        try #require(sourceDidStart)
+        #expect(viewModel.snapshot.items.map(\.sourceID) == [retainedSourceID])
+        #expect(viewModel.snapshot.failures.map(\.sourceID) == [retainedSourceID])
+
+        await gate.resume()
+        let reloadDidFinish = await eventually { await completion.didFinish }
+        if !reloadDidFinish {
+            reload.cancel()
+            await gate.resume()
+        }
+        try #require(reloadDidFinish)
+        await reload.value
+    }
+
     @Test func reloadPublishesFastSourceWhileSlowSourceIsRunning() async throws {
         let slowGate = SuspensionGate()
         let completion = TaskCompletionProbe()
-        let initialItem = libraryItem(sourceName: "Existing NAS", path: "/existing.mp4")
         let slow = MediaLibrarySource(id: UUID(), displayName: "Slow NAS") { path in
             #expect(path == "/")
             await slowGate.wait()
             return [videoItem(path: "/slow.mp4")]
         }
         let fast = source(named: "Fast NAS", videoPath: "/fast.mp4")
+        let initialItem = libraryItem(
+            sourceID: slow.id,
+            sourceName: "Existing NAS",
+            path: "/existing.mp4"
+        )
         let viewModel = MediaLibraryViewModel(
             initialSnapshot: MediaLibrarySnapshot(items: [initialItem])
         )
@@ -209,11 +282,16 @@ struct MediaLibraryViewModelTests {
     @Test func cancellingReloadStopsLoadingAndIgnoresLateResult() async throws {
         let probe = CancellationProbe()
         let completion = TaskCompletionProbe()
-        let source = MediaLibrarySource(id: UUID(), displayName: "Slow NAS") { path in
+        let sourceID = UUID()
+        let source = MediaLibrarySource(id: sourceID, displayName: "Slow NAS") { path in
             #expect(path == "/")
             return try await probe.list()
         }
-        let initialItem = libraryItem(sourceName: "Preview", path: "/preview.mp4")
+        let initialItem = libraryItem(
+            sourceID: sourceID,
+            sourceName: "Preview",
+            path: "/preview.mp4"
+        )
         let initialSnapshot = MediaLibrarySnapshot(items: [initialItem])
         let viewModel = MediaLibraryViewModel(
             initialSnapshot: initialSnapshot
@@ -250,17 +328,22 @@ struct MediaLibraryViewModelTests {
         let oldProbe = CancellationProbe()
         let oldCompletion = TaskCompletionProbe()
         let newCompletion = TaskCompletionProbe()
-        let oldSource = MediaLibrarySource(id: UUID(), displayName: "Old NAS") { path in
+        let sourceID = UUID()
+        let oldSource = MediaLibrarySource(id: sourceID, displayName: "Old NAS") { path in
             #expect(path == "/")
             return try await oldProbe.list()
         }
         let newGate = SuspensionGate()
-        let newSource = MediaLibrarySource(id: UUID(), displayName: "New NAS") { path in
+        let newSource = MediaLibrarySource(id: sourceID, displayName: "New NAS") { path in
             #expect(path == "/")
             await newGate.wait()
             return [videoItem(path: "/new.mp4")]
         }
-        let initialItem = libraryItem(sourceName: "Existing NAS", path: "/existing.mp4")
+        let initialItem = libraryItem(
+            sourceID: sourceID,
+            sourceName: "Existing NAS",
+            path: "/existing.mp4"
+        )
         let initialSnapshot = MediaLibrarySnapshot(items: [initialItem])
         let viewModel = MediaLibraryViewModel(initialSnapshot: initialSnapshot)
 
@@ -683,9 +766,13 @@ private func source(named name: String, videoPath: String) -> MediaLibrarySource
     }
 }
 
-private func libraryItem(sourceName: String, path: String) -> MediaLibraryItem {
+private func libraryItem(
+    sourceID: UUID = UUID(),
+    sourceName: String,
+    path: String
+) -> MediaLibraryItem {
     MediaLibraryItem(
-        sourceID: UUID(),
+        sourceID: sourceID,
         sourceName: sourceName,
         media: videoItem(path: path)
     )

@@ -97,7 +97,7 @@ struct MediaLibraryView: View {
     @StateObject private var viewModel = MediaLibraryViewModel()
     @State private var query = ""
     @State private var refreshGeneration = 0
-    @State private var selectedMediaItem: MediaLibraryItem?
+    @State private var playerSelection: MediaLibraryPlayerSelection?
 
     var body: some View {
         MediaLibraryContentView(
@@ -106,7 +106,7 @@ struct MediaLibraryView: View {
             isRestoring: model.isRestoring,
             isScanning: viewModel.isLoading,
             query: query,
-            play: { selectedMediaItem = $0 },
+            play: selectForPlayback,
             openSource: { destination = .source($0) },
             addSource: addSource
         )
@@ -132,10 +132,16 @@ struct MediaLibraryView: View {
         .task(id: reloadRequest) {
             await viewModel.reload(sources: model.mediaLibrarySources)
         }
-        .sheet(item: $selectedMediaItem) { item in
-            if let connectedSource = model.source(id: item.sourceID) {
-                VideoPlayerSheet(item: item.media, source: connectedSource.source)
+        .onChange(of: model.sources.map(\.id)) { _, sourceIDs in
+            if let playerSelection, !sourceIDs.contains(playerSelection.source.id) {
+                self.playerSelection = nil
             }
+        }
+        .sheet(item: $playerSelection) { selection in
+            VideoPlayerSheet(
+                item: selection.item.media,
+                source: selection.source.source
+            )
         }
     }
 
@@ -145,6 +151,20 @@ struct MediaLibraryView: View {
             generation: refreshGeneration
         )
     }
+
+    private func selectForPlayback(_ item: MediaLibraryItem) {
+        guard let source = model.source(id: item.sourceID) else {
+            return
+        }
+        playerSelection = MediaLibraryPlayerSelection(item: item, source: source)
+    }
+}
+
+private struct MediaLibraryPlayerSelection: Identifiable {
+    let item: MediaLibraryItem
+    let source: AppModel.ConnectedSource
+
+    var id: String { item.id }
 }
 
 struct MediaLibraryContentView: View {
