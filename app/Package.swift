@@ -13,10 +13,18 @@ let package = Package(
         .library(name: "PlaybackCore", targets: ["PlaybackCore"]),
         .library(name: "PlaybackTelemetry", targets: ["PlaybackTelemetry"]),
         .library(name: "SMBSourceKit", targets: ["SMBSourceKit"]),
+        .library(name: "FFmpegKit", targets: ["FFmpegKit"]),
+        .library(name: "RenderKit", targets: ["RenderKit"]),
+        .library(name: "SubtitleKit", targets: ["SubtitleKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
+        .executable(name: "PlaybackProbe", targets: ["PlaybackProbe"]),
     ],
     targets: [
+        .binaryTarget(
+            name: "PierFFmpeg",
+            path: "Vendor/FFmpeg/PierFFmpeg.xcframework"
+        ),
         .target(
             name: "CLibSMB2",
             path: "Vendor/libsmb2",
@@ -60,11 +68,38 @@ let package = Package(
         ),
         .target(
             name: "PlaybackCore",
+            dependencies: [
+                "MediaSourceKit",
+                "StreamIOKit",
+                "FFmpegKit",
+                "RenderKit",
+                "SubtitleKit",
+            ],
             path: "Shared/Sources/PlaybackCore"
         ),
         .target(
             name: "PlaybackTelemetry",
             path: "Shared/Sources/PlaybackTelemetry"
+        ),
+        .target(
+            name: "FFmpegKit",
+            dependencies: ["PierFFmpeg", "MediaSourceKit", "StreamIOKit"],
+            path: "Shared/Sources/FFmpegKit"
+        ),
+        .target(
+            name: "RenderKit",
+            dependencies: ["FFmpegKit"],
+            path: "Shared/Sources/RenderKit",
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo"),
+            ]
+        ),
+        .target(
+            name: "SubtitleKit",
+            dependencies: ["MediaSourceKit"],
+            path: "Shared/Sources/SubtitleKit"
         ),
         .executableTarget(
             name: "PierPlayerApp",
@@ -73,7 +108,10 @@ let package = Package(
                 "StreamIOKit",
                 "PlaybackCore",
                 "PlaybackTelemetry",
+                "FFmpegKit",
+                "RenderKit",
                 "SMBSourceKit",
+                "SubtitleKit",
             ],
             path: "macOS/Sources/PierPlayerApp"
         ),
@@ -85,6 +123,14 @@ let package = Package(
                 "StreamIOKit",
             ],
             path: "Tools/SMBProbe"
+        ),
+        .executableTarget(
+            name: "PlaybackProbe",
+            dependencies: [
+                "FFmpegKit",
+                "MediaSourceKit",
+            ],
+            path: "Tools/PlaybackProbe"
         ),
         .testTarget(
             name: "MediaSourceKitTests",
@@ -103,7 +149,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PlaybackCoreTests",
-            dependencies: ["PlaybackCore"],
+            dependencies: ["PlaybackCore", "MediaSourceKit", "RenderKit", "SubtitleKit"],
             path: "Shared/Tests/PlaybackCoreTests"
         ),
         .testTarget(
@@ -112,8 +158,29 @@ let package = Package(
             path: "Shared/Tests/PlaybackTelemetryTests"
         ),
         .testTarget(
+            name: "FFmpegKitTests",
+            dependencies: ["FFmpegKit", "MediaSourceKit", "StreamIOKit"],
+            path: "Shared/Tests/FFmpegKitTests"
+        ),
+        .testTarget(
+            name: "RenderKitTests",
+            dependencies: ["RenderKit", "FFmpegKit"],
+            path: "Shared/Tests/RenderKitTests"
+        ),
+        .testTarget(
+            name: "SubtitleKitTests",
+            dependencies: ["SubtitleKit", "MediaSourceKit"],
+            path: "Shared/Tests/SubtitleKitTests"
+        ),
+        .testTarget(
             name: "PierPlayerAppTests",
-            dependencies: ["PierPlayerApp"],
+            dependencies: [
+                "PierPlayerApp",
+                "FFmpegKit",
+                "MediaSourceKit",
+                "PlaybackCore",
+                "RenderKit",
+            ],
             path: "macOS/Tests/PierPlayerAppTests"
         ),
     ]

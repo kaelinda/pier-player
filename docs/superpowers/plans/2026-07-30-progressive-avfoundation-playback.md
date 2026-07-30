@@ -1,5 +1,8 @@
 # Progressive AVFoundation Playback Implementation Plan
 
+**Status:** Superseded by `2026-07-30-broad-format-playback.md`; retained as a
+historical implementation record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Start AVFoundation-compatible SMB videos from bounded random-access reads instead of downloading the complete file before creating AVPlayer.

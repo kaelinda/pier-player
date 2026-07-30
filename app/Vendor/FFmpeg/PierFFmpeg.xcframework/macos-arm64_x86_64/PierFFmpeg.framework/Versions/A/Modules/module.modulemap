@@ -1,0 +1,5 @@
+framework module PierFFmpeg {
+    umbrella header "PierFFmpeg.h"
+    export *
+    module * { export * }
+}

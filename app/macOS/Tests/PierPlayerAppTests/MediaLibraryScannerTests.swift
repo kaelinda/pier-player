@@ -6,7 +6,7 @@ import Testing
 
 @Suite("MediaLibraryScannerTests")
 struct MediaLibraryScannerTests {
-    @Test func scanIncludesOnlyPlayableAVFoundationVideoFiles() async throws {
+    @Test func scanIncludesAllSupportedVideoContainers() async throws {
         let sourceID = UUID()
         let source = MediaLibrarySource(
             id: sourceID,
@@ -18,6 +18,8 @@ struct MediaLibraryScannerTests {
                     mediaItem(name: "clip.M4V", path: "/clip.M4V"),
                     mediaItem(name: "trailer.mov", path: "/trailer.mov"),
                     mediaItem(name: "FEATURE.MKV", path: "/FEATURE.MKV"),
+                    mediaItem(name: "browser.webm", path: "/browser.webm"),
+                    mediaItem(name: "capture.ts", path: "/capture.ts"),
                     mediaItem(name: "notes.txt", path: "/notes.txt"),
                     mediaItem(name: "archive.avi", path: "/archive.avi"),
                 ]
@@ -31,6 +33,10 @@ struct MediaLibraryScannerTests {
                 "/movie.mp4",
                 "/clip.M4V",
                 "/trailer.mov",
+                "/FEATURE.MKV",
+                "/browser.webm",
+                "/capture.ts",
+                "/archive.avi",
             ])
         #expect(result.items.allSatisfy { $0.sourceID == sourceID })
         #expect(result.items.allSatisfy { $0.sourceName == "Living Room NAS" })

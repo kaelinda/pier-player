@@ -111,7 +111,7 @@ struct MediaLibraryScanner: Sendable {
                                 depth: directory.depth + 1
                             ))
                     }
-                } else if AVFoundationMediaType(fileName: entry.name) != nil {
+                } else if entry.isSupportedVideo {
                     items.append(
                         MediaLibraryItem(
                             sourceID: source.id,

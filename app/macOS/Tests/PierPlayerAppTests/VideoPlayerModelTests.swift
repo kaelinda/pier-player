@@ -1,143 +1,371 @@
-import AVFoundation
+import FFmpegKit
 import Foundation
 import MediaSourceKit
+import PlaybackCore
+import RenderKit
 import Testing
 @testable import PierPlayerApp
 
-@Suite @MainActor struct VideoPlayerModelTests {
-    @Test func startTransfersTheOpenFileWithoutEagerReads() async throws {
-        let file = ModelRecordingReadableFile(size: 8 * 1024 * 1024)
-        let source = ModelFakeMediaSource(file: file)
-        let session = FakeVideoPlaybackSession()
-        let item = videoFixtureItem
-        let model = VideoPlayerModel(
-            item: item,
-            source: source,
-            sessionFactory: { openedFile, fileName in
-                #expect(openedFile.identity == file.identity)
-                #expect(fileName == item.name)
-                return session
-            }
-        )
+@MainActor
+@Test func openingStreamsAnOpenHandleWithoutAggregatingTheFile() async throws {
+    let item = testVideoItem()
+    let file = ModelTestFile(size: 128 * 1024 * 1024)
+    let source = ModelTestSource(file: file)
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: item,
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
 
-        await model.start()
+    await model.start()
+    try await waitForModel(model) { $0.state == .playing }
 
-        #expect(await source.openedPaths == [item.path])
-        #expect(await file.readRequests.isEmpty)
-        #expect(session.playCount == 1)
-        let player = try #require(model.player)
-        #expect(player === session.player)
-        #expect(model.phase == .playing)
-    }
+    #expect(source.openedPaths == [item.path])
+    #expect(file.readByteCount == 0)
+    #expect(coordinator.startedIdentity == file.identity)
 
-    @Test func stopClearsPlayerAndStopsSessionOnce() async throws {
-        let file = ModelRecordingReadableFile(size: 1024)
-        let source = ModelFakeMediaSource(file: file)
-        let session = FakeVideoPlaybackSession()
-        let model = VideoPlayerModel(
-            item: videoFixtureItem,
-            source: source,
-            sessionFactory: { _, _ in session }
-        )
-        await model.start()
-        _ = try #require(model.player)
+    let reopened = try await coordinator.reopen()
+    #expect(reopened.identity == file.identity)
+    #expect(source.openedPaths == [item.path, item.path])
 
-        await model.stop()
-        await model.stop()
-
-        #expect(model.player == nil)
-        #expect(session.stopCount == 1)
-    }
-
-    @Test func sessionConstructionFailureClosesOpenedFile() async {
-        let file = ModelRecordingReadableFile(size: 1024)
-        let source = ModelFakeMediaSource(file: file)
-        let model = VideoPlayerModel(
-            item: videoFixtureItem,
-            source: source,
-            sessionFactory: { _, _ in throw ModelFixtureError.sessionConstructionFailed }
-        )
-
-        await model.start()
-
-        #expect(await file.closeCount == 1)
-        #expect(model.player == nil)
-        #expect(model.phase == .failed("sessionConstructionFailed"))
-    }
-}
-
-private let videoFixtureItem = MediaSourceItem(
-    name: "Large Fixture.mp4",
-    path: "/Movies/Large Fixture.mp4",
-    kind: .file,
-    size: 8 * 1024 * 1024,
-    modifiedAt: nil
-)
-
-private enum ModelFixtureError: Error {
-    case sessionConstructionFailed
+    await model.stop()
+    #expect(coordinator.stopCount == 1)
 }
 
 @MainActor
-private final class FakeVideoPlaybackSession: VideoPlaybackSession {
-    let player = AVPlayer()
-    private(set) var playCount = 0
-    private(set) var stopCount = 0
+@Test func modelFollowsSnapshotsAndSendsOneSeekAfterScrubbing() async throws {
+    let item = testVideoItem()
+    let source = ModelTestSource(file: ModelTestFile(size: 1_024))
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: item,
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
 
-    func play() {
-        playCount += 1
+    await model.start()
+    coordinator.send(snapshot(state: .playing, position: 0.25))
+    try await waitForModel(model) { $0.position == 0.25 }
+
+    model.beginScrubbing()
+    model.updateScrubPosition(0.5)
+    model.updateScrubPosition(0.75)
+    #expect(coordinator.seekPositions.isEmpty)
+    await model.endScrubbing()
+    #expect(coordinator.seekPositions == [0.75])
+}
+
+@MainActor
+@Test func modelExposesTrackMenusAndSubtitleOff() async throws {
+    let item = testVideoItem()
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: item,
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
+    let tracks = [
+        PlaybackTrack(index: 0, kind: .video, codecName: "h264", language: nil, title: nil, isSelected: true),
+        PlaybackTrack(index: 1, kind: .audio, codecName: "aac", language: "eng", title: "English 5.1", isSelected: true),
+        PlaybackTrack(index: 2, kind: .subtitle, codecName: "subrip", language: "eng", title: "English", isSelected: true),
+    ]
+
+    await model.start()
+    coordinator.send(snapshot(state: .playing, tracks: tracks))
+    try await waitForModel(model) { $0.tracks.count == 3 }
+
+    #expect(model.audioTracks.map(\.index) == [1])
+    #expect(model.subtitleTracks.map(\.index) == [2])
+    await model.selectSubtitleTrack(nil)
+    #expect(coordinator.subtitleSelections == [nil])
+}
+
+@MainActor
+@Test func closeWhileOpeningClosesLateHandleWithoutStartingPlayback() async throws {
+    let file = ModelTestFile(size: 1_024)
+    let source = DelayedModelTestSource(file: file)
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
+    let openRequests = source.openRequests
+
+    let startTask = Task { await model.start() }
+    for await _ in openRequests { break }
+    await model.stop()
+    await source.releaseOpen()
+    await startTask.value
+
+    #expect(file.closeCount == 1)
+    #expect(coordinator.startedIdentity == nil)
+    #expect(coordinator.stopCount == 1)
+}
+
+@MainActor
+@Test func modelDiscoversAndLoadsSameBasenameExternalSubtitles() async throws {
+    let subtitleBytes = Data(
+        "1\n00:00:00,200 --> 00:00:01,200\nExternal subtitle\n".utf8
+    )
+    let subtitleItem = MediaSourceItem(
+        name: "test.en.srt",
+        path: "/Movies/test.en.srt",
+        kind: .file,
+        size: Int64(subtitleBytes.count),
+        modifiedAt: nil
+    )
+    let mediaFile = ModelTestFile(size: 1_024)
+    let subtitleFile = ModelTestFile(
+        bytes: subtitleBytes,
+        path: subtitleItem.path
+    )
+    let source = ModelTestSource(
+        file: mediaFile,
+        directoryItems: [subtitleItem],
+        additionalFiles: [subtitleItem.path: subtitleFile]
+    )
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
+
+    await model.start()
+
+    #expect(source.listedPaths == ["/Movies"])
+    #expect(source.openedPaths == ["/Movies/test.mkv", subtitleItem.path])
+    #expect(subtitleFile.closeCount == 1)
+    await model.stop()
+}
+
+@MainActor
+func waitForModel(
+    _ model: VideoPlayerModel,
+    predicate: (PlaybackCoordinatorSnapshot) -> Bool
+) async throws {
+    let deadline = ProcessInfo.processInfo.systemUptime + 2
+    while ProcessInfo.processInfo.systemUptime < deadline {
+        if predicate(model.snapshot) { return }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    Issue.record("timed out waiting for model state: \(model.snapshot)")
+}
+
+func testVideoItem() -> MediaSourceItem {
+    MediaSourceItem(
+        name: "A very long movie name for track and layout verification.mkv",
+        path: "/Movies/test.mkv",
+        kind: .file,
+        size: 128 * 1024 * 1024,
+        modifiedAt: nil
+    )
+}
+
+func snapshot(
+    state: PlaybackState,
+    position: TimeInterval = 0,
+    tracks: [PlaybackTrack] = []
+) -> PlaybackCoordinatorSnapshot {
+    PlaybackCoordinatorSnapshot(
+        sessionID: UUID(),
+        generation: 0,
+        state: state,
+        intendsToPlay: state == .playing,
+        position: position,
+        duration: 2,
+        videoDecoderMode: .software,
+        tracks: tracks,
+        subtitleText: nil,
+        failure: nil
+    )
+}
+
+final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sendable {
+    let snapshots: AsyncStream<PlaybackCoordinatorSnapshot>
+    private let continuation: AsyncStream<PlaybackCoordinatorSnapshot>.Continuation
+    private let lock = NSLock()
+    private var state = State()
+
+    private struct State {
+        var startedIdentity: MediaFileIdentity?
+        var reopenFile: MediaFileReopener?
+        var stopCount = 0
+        var seekPositions: [TimeInterval] = []
+        var subtitleSelections: [Int?] = []
     }
 
+    var startedIdentity: MediaFileIdentity? { lock.withLock { state.startedIdentity } }
+    var stopCount: Int { lock.withLock { state.stopCount } }
+    var seekPositions: [TimeInterval] { lock.withLock { state.seekPositions } }
+    var subtitleSelections: [Int?] { lock.withLock { state.subtitleSelections } }
+
+    init() {
+        let stream = AsyncStream<PlaybackCoordinatorSnapshot>.makeStream()
+        snapshots = stream.stream
+        continuation = stream.continuation
+    }
+
+    func send(_ snapshot: PlaybackCoordinatorSnapshot) {
+        continuation.yield(snapshot)
+    }
+
+    func start(
+        file: any MediaReadableFile,
+        reopenFile: @escaping MediaFileReopener
+    ) async throws {
+        lock.withLock {
+            state.startedIdentity = file.identity
+            state.reopenFile = reopenFile
+        }
+        continuation.yield(snapshot(state: .playing))
+    }
+
+    func reopen() async throws -> any MediaReadableFile {
+        let reopenFile = try #require(lock.withLock { state.reopenFile })
+        return try await reopenFile()
+    }
+
+    func pause() async throws {}
+    func resume() async throws {}
+
+    func seek(to position: TimeInterval) async throws -> UInt64 {
+        lock.withLock { state.seekPositions.append(position) }
+        return 1
+    }
+
+    func selectAudioTrack(index: Int) async throws -> UInt64 { 1 }
+
+    func selectSubtitleTrack(index: Int?) async throws {
+        lock.withLock { state.subtitleSelections.append(index) }
+    }
+
+    func registerExternalSubtitles(_ subtitles: [ExternalPlaybackSubtitle]) async {}
+
     func stop() async {
-        stopCount += 1
+        lock.withLock { state.stopCount += 1 }
+        continuation.yield(.idle)
     }
 }
 
-private actor ModelFakeMediaSource: MediaSource {
-    nonisolated let id = UUID()
-    nonisolated let displayName = "Fixture Source"
+final class ModelTestSource: MediaSource, @unchecked Sendable {
+    let id = UUID()
+    let displayName = "Test Source"
+    let file: ModelTestFile
+    let directoryItems: [MediaSourceItem]
+    let additionalFiles: [String: ModelTestFile]
+    private let lock = NSLock()
+    private var paths: [String] = []
+    private var directories: [String] = []
 
-    private let file: any MediaReadableFile
-    private(set) var openedPaths: [String] = []
+    var openedPaths: [String] { lock.withLock { paths } }
+    var listedPaths: [String] { lock.withLock { directories } }
 
-    init(file: any MediaReadableFile) {
+    init(
+        file: ModelTestFile,
+        directoryItems: [MediaSourceItem] = [],
+        additionalFiles: [String: ModelTestFile] = [:]
+    ) {
         self.file = file
+        self.directoryItems = directoryItems
+        self.additionalFiles = additionalFiles
     }
 
     func connect() async throws {}
     func disconnect() async {}
-
     func list(directory path: String) async throws -> [MediaSourceItem] {
-        []
+        lock.withLock { directories.append(path) }
+        return directoryItems
     }
 
     func open(file path: String) async throws -> any MediaReadableFile {
-        openedPaths.append(path)
-        return file
+        lock.withLock { paths.append(path) }
+        return additionalFiles[path] ?? file
     }
 }
 
-private actor ModelRecordingReadableFile: MediaReadableFile {
-    nonisolated let identity: MediaFileIdentity
+final class ModelTestFile: MediaReadableFile, @unchecked Sendable {
+    let identity: MediaFileIdentity
+    private let bytes: Data?
+    private let lock = NSLock()
+    private var bytesRead = 0
+    private var closes = 0
 
-    private(set) var readRequests: [(offset: Int64, length: Int)] = []
-    private(set) var closeCount = 0
+    var readByteCount: Int { lock.withLock { bytesRead } }
+    var closeCount: Int { lock.withLock { closes } }
 
-    init(size: Int64) {
-        self.identity = MediaFileIdentity(
+    init(size: Int64, path: String = "/Movies/test.mkv") {
+        bytes = nil
+        identity = MediaFileIdentity(
             sourceID: UUID(),
-            path: "/Movies/Large Fixture.mp4",
+            path: path,
             size: size,
             modifiedAt: nil
         )
     }
 
+    init(bytes: Data, path: String) {
+        self.bytes = bytes
+        identity = MediaFileIdentity(
+            sourceID: UUID(),
+            path: path,
+            size: Int64(bytes.count),
+            modifiedAt: nil
+        )
+    }
+
     func read(at offset: Int64, length: Int) async throws -> Data {
-        readRequests.append((offset, length))
+        lock.withLock { bytesRead += length }
+        if let bytes {
+            let start = Int(offset)
+            let end = min(start + length, bytes.count)
+            guard start >= 0, start < end else { return Data() }
+            return bytes.subdata(in: start..<end)
+        }
         return Data(repeating: 0, count: length)
     }
 
     func close() async {
-        closeCount += 1
+        lock.withLock { closes += 1 }
+    }
+}
+
+actor DelayedModelTestSource: MediaSource {
+    nonisolated let id = UUID()
+    nonisolated let displayName = "Delayed Source"
+    nonisolated let openRequests: AsyncStream<Void>
+
+    private let file: ModelTestFile
+    private let openRequestContinuation: AsyncStream<Void>.Continuation
+    private var openContinuation: CheckedContinuation<any MediaReadableFile, Never>?
+
+    init(file: ModelTestFile) {
+        self.file = file
+        let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        openRequests = stream.stream
+        openRequestContinuation = stream.continuation
+    }
+
+    func connect() async throws {}
+    func disconnect() async {}
+    func list(directory path: String) async throws -> [MediaSourceItem] { [] }
+
+    func open(file path: String) async throws -> any MediaReadableFile {
+        openRequestContinuation.yield()
+        return await withCheckedContinuation { continuation in
+            openContinuation = continuation
+        }
+    }
+
+    func releaseOpen() {
+        openContinuation?.resume(returning: file)
+        openContinuation = nil
     }
 }

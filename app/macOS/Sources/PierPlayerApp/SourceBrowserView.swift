@@ -1,78 +1,6 @@
-import AVKit
 import MediaSourceKit
 import SMBSourceKit
 import SwiftUI
-
-@MainActor
-final class VideoPlayerModel: ObservableObject {
-    let item: MediaSourceItem
-    let source: any MediaSource
-
-    @Published private(set) var phase: Phase = .preparing
-    @Published private(set) var player: AVPlayer?
-
-    enum Phase: Equatable {
-        case preparing
-        case playing
-        case failed(String)
-    }
-
-    private let sessionFactory: VideoPlaybackSessionFactory
-    private var playbackSession: (any VideoPlaybackSession)?
-
-    init(
-        item: MediaSourceItem,
-        source: any MediaSource,
-        sessionFactory: @escaping VideoPlaybackSessionFactory = { file, fileName in
-            try ProgressivePlaybackSession(file: file, fileName: fileName)
-        }
-    ) {
-        self.item = item
-        self.source = source
-        self.sessionFactory = sessionFactory
-    }
-
-    func start() async {
-        await stop()
-        phase = .preparing
-
-        do {
-            let file = try await source.open(file: item.path)
-
-            let session: any VideoPlaybackSession
-            do {
-                try Task.checkCancellation()
-                session = try sessionFactory(file, item.name)
-            } catch {
-                await file.close()
-                throw error
-            }
-
-            do {
-                try Task.checkCancellation()
-            } catch {
-                await session.stop()
-                throw error
-            }
-
-            playbackSession = session
-            player = session.player
-            phase = .playing
-            session.play()
-        } catch is CancellationError {
-            return
-        } catch {
-            phase = .failed(String(describing: error))
-        }
-    }
-
-    func stop() async {
-        let session = playbackSession
-        playbackSession = nil
-        player = nil
-        await session?.stop()
-    }
-}
 
 struct SourceBrowserView: View {
     @EnvironmentObject private var model: AppModel
@@ -201,7 +129,7 @@ struct SourceBrowserView: View {
             )) {
                 MediaItemRow(item: item)
             }
-        } else if isPlayableVideo(item) {
+        } else if item.isSupportedVideo {
             Button {
                 selectedFile = item
             } label: {
@@ -227,10 +155,6 @@ struct SourceBrowserView: View {
 
     private var itemCountLabel: String {
         items.count == 1 ? "1 Item" : "\(items.count) Items"
-    }
-
-    private func isPlayableVideo(_ item: MediaSourceItem) -> Bool {
-        item.kind == .file && AVFoundationMediaType(fileName: item.name) != nil
     }
 
     private func load() async {
@@ -298,13 +222,13 @@ private struct MediaItemRow: View {
 
     private var iconName: String {
         if item.kind == .directory { return "folder.fill" }
-        if isPlayableVideo { return "film.fill" }
+        if item.isSupportedVideo { return "film.fill" }
         return "doc.fill"
     }
 
     private var iconColor: Color {
         if item.kind == .directory { return .teal }
-        if isPlayableVideo { return .orange }
+        if item.isSupportedVideo { return .orange }
         return .secondary
     }
 
@@ -312,174 +236,12 @@ private struct MediaItemRow: View {
         if item.kind == .directory { return "Folder" }
         let fileExtension = (item.name as NSString).pathExtension.uppercased()
         guard !fileExtension.isEmpty else { return "File" }
-        return isPlayableVideo ? "\(fileExtension) Video" : "\(fileExtension) File"
-    }
-
-    private var isPlayableVideo: Bool {
-        item.kind == .file && AVFoundationMediaType(fileName: item.name) != nil
+        return item.isSupportedVideo ? "\(fileExtension) Video" : "\(fileExtension) File"
     }
 
     private var sizeLabel: String? {
         guard item.kind == .file, let size = item.size else { return nil }
         return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
-    }
-}
-
-struct VideoPlayerSheet: View {
-    let item: MediaSourceItem
-    let source: any MediaSource
-
-    @StateObject private var playerModel: VideoPlayerModel
-    @Environment(\.dismiss) private var dismiss
-
-    init(item: MediaSourceItem, source: any MediaSource) {
-        self.item = item
-        self.source = source
-        _playerModel = StateObject(wrappedValue: VideoPlayerModel(item: item, source: source))
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            playerHeader
-            Divider()
-            playerContent
-        }
-        .frame(minWidth: 760, idealWidth: 960, minHeight: 520, idealHeight: 640)
-        .background(Color.black)
-        .task {
-            await playerModel.start()
-        }
-        .onDisappear {
-            Task {
-                await playerModel.stop()
-            }
-        }
-    }
-
-    private var playerHeader: some View {
-        HStack(spacing: 11) {
-            Image(systemName: "film.fill")
-                .foregroundStyle(.orange)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let size = item.size {
-                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer()
-
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .help("Close Player")
-            .accessibilityLabel("Close Player")
-            .keyboardShortcut(.cancelAction)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 54)
-        .background(.bar)
-    }
-
-    @ViewBuilder
-    private var playerContent: some View {
-        switch playerModel.phase {
-        case .preparing:
-            VStack(spacing: 20) {
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.08))
-                    Image(systemName: "externaldrive.fill.badge.timemachine")
-                        .font(.system(size: 28, weight: .medium))
-                        .foregroundStyle(.teal)
-                }
-                .frame(width: 64, height: 64)
-
-                VStack(spacing: 6) {
-                    Text("Preparing Video")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text("Opening the remote media stream")
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.62))
-                }
-
-                ProgressView()
-                    .controlSize(.regular)
-                    .tint(.teal)
-                    .accessibilityLabel("Opening Video")
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .black))
-
-        case .playing:
-            if let player = playerModel.player {
-                VideoPlayerView(player: player)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-            } else {
-                PlayerFailureView(message: "The local video could not be opened.")
-            }
-
-        case .failed(let message):
-            PlayerFailureView(message: message)
-        }
-    }
-
-}
-
-private struct PlayerFailureView: View {
-    let message: String
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(.orange)
-            Text("Playback Failed")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.white.opacity(0.62))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 460)
-        }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
-    }
-}
-
-struct VideoPlayerView: NSViewRepresentable {
-    let player: AVPlayer
-
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
-        view.controlsStyle = .floating
-        view.player = player
-        return view
-    }
-
-    func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        if nsView.player !== player {
-            nsView.player = player
-        }
-    }
-
-    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
-        nsView.player = nil
     }
 }
 
