@@ -5,6 +5,8 @@ public final class FFmpegSession: @unchecked Sendable {
     private let bridge: FFmpegIOBridge
     private let lock = NSLock()
     private var nativeSession: OpaquePointer?
+    private var decodersPrepared = false
+    private var isCancelled = false
 
     public convenience init(
         data: Data,
@@ -36,6 +38,15 @@ public final class FFmpegSession: @unchecked Sendable {
         ) else {
             bridge.cancel()
             throw Self.error(from: &nativeError)
+        }
+        if bridge.interrupted() != 0 {
+            var expiredSession: OpaquePointer? = session
+            ppff_session_close(&expiredSession)
+            bridge.cancel()
+            throw FFmpegError.native(
+                code: Int(PPFF_ERROR_IO),
+                message: "probe time limit exceeded"
+            )
         }
 
         self.bridge = bridge
@@ -87,11 +98,138 @@ public final class FFmpegSession: @unchecked Sendable {
         }
     }
 
+    public func prepareForDecoding(
+        configuration: FFmpegDecodeConfiguration = .default
+    ) throws {
+        try lock.withLock {
+            guard let nativeSession else { throw FFmpegError.sessionClosed }
+            guard !isCancelled else { throw FFmpegError.cancelled }
+
+            var nativeError = PPFFError()
+            let nativeConfiguration = PPFFDecodeConfiguration(
+                prefer_hardware: configuration.preferHardware ? 1 : 0,
+                force_hardware_open_failure: configuration.forceHardwareOpenFailure ? 1 : 0
+            )
+            let result = ppff_session_prepare_decoders(
+                nativeSession,
+                nativeConfiguration,
+                &nativeError
+            )
+            guard result >= 0 else {
+                throw Self.error(from: &nativeError)
+            }
+            decodersPrepared = true
+        }
+    }
+
+    public func videoDecoderStatus() throws -> VideoDecoderStatus {
+        try lock.withLock {
+            guard let nativeSession else { throw FFmpegError.sessionClosed }
+            guard decodersPrepared else { throw FFmpegError.decodersNotPrepared }
+
+            var nativeError = PPFFError()
+            var nativeStatus = PPFFDecoderStatus()
+            let result = ppff_session_video_decoder_status(
+                nativeSession,
+                &nativeStatus,
+                &nativeError
+            )
+            guard result >= 0 else {
+                throw Self.error(from: &nativeError)
+            }
+            return VideoDecoderStatus(
+                mode: Self.decoderMode(from: Int(nativeStatus.mode.rawValue)),
+                hardwareAttempted: nativeStatus.hardware_attempted != 0,
+                softwareFallbackCount: Int(nativeStatus.software_fallback_count)
+            )
+        }
+    }
+
+    public func readNextSample() throws -> DecodedSample? {
+        try lock.withLock { () throws -> DecodedSample? in
+            guard let nativeSession else { throw FFmpegError.sessionClosed }
+            guard decodersPrepared else { throw FFmpegError.decodersNotPrepared }
+            guard !isCancelled else { throw FFmpegError.cancelled }
+
+            var nativeError = PPFFError()
+            var nativeSample = PPFFSample()
+            let result = ppff_session_read_next(
+                nativeSession,
+                &nativeSample,
+                &nativeError
+            )
+            guard result >= 0 else {
+                throw Self.error(from: &nativeError)
+            }
+            guard result > 0 else { return nil }
+            defer { ppff_sample_release(&nativeSample) }
+
+            let presentationTime = TimeInterval(nativeSample.presentation_time_us) / 1_000_000
+            let duration = TimeInterval(nativeSample.duration_us) / 1_000_000
+            switch Int(nativeSample.kind.rawValue) {
+            case 1:
+                guard let pixelBuffer = nativeSample.video_buffer else {
+                    throw FFmpegError.native(code: -1, message: "missing decoded video buffer")
+                }
+                let retainedPixelBuffer = pixelBuffer
+                    .retain()
+                    .takeRetainedValue()
+                return .video(
+                    DecodedVideoSample(
+                        pixelBuffer: retainedPixelBuffer,
+                        presentationTime: presentationTime,
+                        duration: duration,
+                        streamIndex: Int(nativeSample.stream_index)
+                    )
+                )
+            case 2:
+                guard let audioData = nativeSample.audio_data,
+                      nativeSample.audio_byte_count > 0 else {
+                    throw FFmpegError.native(code: -1, message: "missing decoded audio data")
+                }
+                return .audio(
+                    DecodedAudioSample(
+                        data: Data(
+                            bytes: audioData,
+                            count: Int(nativeSample.audio_byte_count)
+                        ),
+                        presentationTime: presentationTime,
+                        duration: duration,
+                        sampleCount: Int(nativeSample.audio_sample_count),
+                        sampleRate: Int(nativeSample.audio_sample_rate),
+                        channelCount: Int(nativeSample.audio_channel_count),
+                        streamIndex: Int(nativeSample.stream_index)
+                    )
+                )
+            default:
+                throw FFmpegError.native(code: -1, message: "unknown decoded sample kind")
+            }
+        }
+    }
+
+    public func cancel() {
+        lock.withLock {
+            guard nativeSession != nil else { return }
+            isCancelled = true
+            bridge.cancel()
+        }
+    }
+
     public func close() {
         lock.withLock {
             guard nativeSession != nil else { return }
+            isCancelled = true
             bridge.cancel()
             ppff_session_close(&nativeSession)
+            decodersPrepared = false
+        }
+    }
+
+    private static func decoderMode(from rawValue: Int) -> VideoDecoderMode {
+        switch rawValue {
+        case 1: .videoToolbox
+        case 2: .software
+        default: .none
         }
     }
 

@@ -58,6 +58,7 @@ static void ppff_session_destroy(PPFFSession *session) {
         return;
     }
 
+    ppff_decode_destroy(session);
     if (session->format_context != NULL) {
         avformat_close_input(&session->format_context);
     }

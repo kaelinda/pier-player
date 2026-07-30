@@ -95,7 +95,7 @@ final class FFmpegIOBridge: @unchecked Sendable {
         }
     }
 
-    fileprivate func interrupted() -> Int32 {
+    func interrupted() -> Int32 {
         lock.withLock {
             shouldInterruptLocked() ? 1 : 0
         }
