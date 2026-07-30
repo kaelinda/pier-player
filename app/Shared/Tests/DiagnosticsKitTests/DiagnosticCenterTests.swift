@@ -10,17 +10,56 @@ import Testing
 
     await center.ingest(event(sequence: 1, persistence: .detailed, at: 10))
     await center.ingest(event(sequence: 2, persistence: .essential, at: 10))
-    #expect(try await store.decodedEventSequences() == [2])
+    #expect(try await store.decodedEventSequences(named: .resourceRead) == [2])
 
     await center.setDetailedEnabled(true)
     await center.ingest(event(sequence: 3, persistence: .detailed, at: 10))
-    #expect(try await store.decodedEventSequences() == [2, 3])
+    #expect(try await store.decodedEventSequences(named: .resourceRead) == [2, 3])
 
     clock.advance(by: 1_801)
     await center.ingest(event(sequence: 4, persistence: .detailed, at: 1_811))
-    #expect(try await store.decodedEventSequences() == [2, 3])
+    #expect(try await store.decodedEventSequences(named: .resourceRead) == [2, 3])
     #expect(await center.statusSnapshot().policy == .standard)
 
+    await center.stop()
+}
+
+@Test func centerAcceptsAnExplicitDetailedCaptureDuration() async {
+    let store = MemoryDiagnosticStore()
+    let clock = TestDiagnosticClock(Date(timeIntervalSince1970: 10))
+    let center = makeCenter(store: store, clock: clock)
+    await center.start()
+
+    await center.requestDetailedCapture(duration: 900)
+
+    let status = await center.statusSnapshot()
+    #expect(status.policy == .detailed)
+    #expect(status.detailedUntil == Date(timeIntervalSince1970: 910))
+    await center.stop()
+}
+
+@Test func centerFlushesAndExportsOnlyRequestedRuns() async throws {
+    let store = MemoryDiagnosticStore()
+    let clock = TestDiagnosticClock(Date(timeIntervalSince1970: 10))
+    let runID = UUID(uuidString: "00000000-0000-0000-0000-000000000099")!
+    let center = DiagnosticCenter(
+        runID: runID,
+        environment: testEnvironment,
+        store: store,
+        systemLogger: NoopDiagnosticSystemLogger(),
+        now: { clock.now }
+    )
+    await center.start()
+    await center.ingest(event(sequence: 1, persistence: .essential, at: 10))
+    let destination = FileManager.default.temporaryDirectory
+        .appendingPathComponent("center-export-\(UUID().uuidString).pierdiag", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: destination) }
+
+    try await center.export(runIDs: [runID], to: destination)
+
+    #expect(await store.flushCount == 1)
+    #expect(await store.snapshotRunIDs == [runID])
+    #expect(try DiagnosticBundleReader.validate(at: destination).manifest.runs.map(\.runID) == [runID])
     await center.stop()
 }
 
@@ -200,6 +239,8 @@ private actor MemoryDiagnosticStore: DiagnosticStore {
     private var manifest: DiagnosticRunManifest?
     private var failAppends = false
     private(set) var closeCount = 0
+    private(set) var flushCount = 0
+    private(set) var snapshotRunIDs: [UUID] = []
 
     func setFailAppends(_ value: Bool) {
         failAppends = value
@@ -219,7 +260,9 @@ private actor MemoryDiagnosticStore: DiagnosticStore {
         metrics.append(contentsOf: records)
     }
 
-    func flush() throws {}
+    func flush() throws {
+        flushCount += 1
+    }
 
     func closeRun(endedAt: Date) throws {
         closeCount += 1
@@ -228,6 +271,7 @@ private actor MemoryDiagnosticStore: DiagnosticStore {
     func summaries() throws -> [DiagnosticRunSummary] { [] }
 
     func snapshot(runID: UUID) throws -> DiagnosticStoreSnapshot {
+        snapshotRunIDs.append(runID)
         guard let manifest else { throw DiagnosticStoreError.runNotFound }
         return DiagnosticStoreSnapshot(
             manifest: manifest,
@@ -246,8 +290,10 @@ private actor MemoryDiagnosticStore: DiagnosticStore {
 
     func clearClosedRuns() throws {}
 
-    func decodedEventSequences() throws -> [UInt64] {
-        try decodedEvents().map(\.sequence)
+    func decodedEventSequences(named name: DiagnosticEventName? = nil) throws -> [UInt64] {
+        try decodedEvents()
+            .filter { name == nil || $0.name == name }
+            .map(\.sequence)
     }
 
     func decodedEvents() throws -> [DiagnosticEvent] {

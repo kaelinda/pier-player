@@ -199,6 +199,11 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
     public let oldPlaybackState: DiagnosticPlaybackState?
     public let newPlaybackState: DiagnosticPlaybackState?
     public let playbackPositionSeconds: Double?
+    public let memoryPressure: DiagnosticMemoryPressure?
+    public let thermalState: DiagnosticThermalState?
+    public let powerState: DiagnosticPowerState?
+    public let networkAvailability: DiagnosticNetworkAvailability?
+    public let networkInterface: DiagnosticNetworkInterface?
     public let incidentKind: DiagnosticIncidentKind?
     public let error: DiagnosticErrorDescriptor?
 
@@ -221,6 +226,11 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         oldPlaybackState: DiagnosticPlaybackState? = nil,
         newPlaybackState: DiagnosticPlaybackState? = nil,
         playbackPositionSeconds: Double? = nil,
+        memoryPressure: DiagnosticMemoryPressure? = nil,
+        thermalState: DiagnosticThermalState? = nil,
+        powerState: DiagnosticPowerState? = nil,
+        networkAvailability: DiagnosticNetworkAvailability? = nil,
+        networkInterface: DiagnosticNetworkInterface? = nil,
         incidentKind: DiagnosticIncidentKind? = nil,
         error: DiagnosticErrorDescriptor? = nil
     ) {
@@ -242,6 +252,11 @@ public struct DiagnosticPayload: Codable, Equatable, Sendable {
         self.oldPlaybackState = oldPlaybackState
         self.newPlaybackState = newPlaybackState
         self.playbackPositionSeconds = playbackPositionSeconds
+        self.memoryPressure = memoryPressure
+        self.thermalState = thermalState
+        self.powerState = powerState
+        self.networkAvailability = networkAvailability
+        self.networkInterface = networkInterface
         self.incidentKind = incidentKind
         self.error = error
     }

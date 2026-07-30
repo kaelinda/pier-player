@@ -34,12 +34,36 @@ public enum DiagnosticNetworkInterface: String, Codable, Equatable, Sendable {
     case none
 }
 
+public enum DiagnosticMemoryPressure: String, Codable, Equatable, Sendable {
+    case normal
+    case warning
+    case critical
+    case unknown
+}
+
+public enum DiagnosticThermalState: String, Codable, Equatable, Sendable {
+    case nominal
+    case fair
+    case serious
+    case critical
+    case unknown
+}
+
+public enum DiagnosticPowerState: String, Codable, Equatable, Sendable {
+    case normal
+    case lowPower = "low_power"
+    case unknown
+}
+
 public struct DiagnosticRunEnvironment: Codable, Equatable, Sendable {
     public let appVersion: String
     public let appBuild: String
     public let osVersion: String
     public let architecture: DiagnosticArchitecture
     public let hardwareClass: DiagnosticHardwareClass
+    public let memoryPressure: DiagnosticMemoryPressure
+    public let thermalState: DiagnosticThermalState
+    public let powerState: DiagnosticPowerState
     public let networkAvailability: DiagnosticNetworkAvailability
     public let networkInterface: DiagnosticNetworkInterface
 
@@ -49,6 +73,9 @@ public struct DiagnosticRunEnvironment: Codable, Equatable, Sendable {
         osVersion: String,
         architecture: DiagnosticArchitecture,
         hardwareClass: DiagnosticHardwareClass,
+        memoryPressure: DiagnosticMemoryPressure = .unknown,
+        thermalState: DiagnosticThermalState = .unknown,
+        powerState: DiagnosticPowerState = .unknown,
         networkAvailability: DiagnosticNetworkAvailability,
         networkInterface: DiagnosticNetworkInterface
     ) {
@@ -57,8 +84,53 @@ public struct DiagnosticRunEnvironment: Codable, Equatable, Sendable {
         self.osVersion = osVersion
         self.architecture = architecture
         self.hardwareClass = hardwareClass
+        self.memoryPressure = memoryPressure
+        self.thermalState = thermalState
+        self.powerState = powerState
         self.networkAvailability = networkAvailability
         self.networkInterface = networkInterface
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case appVersion
+        case appBuild
+        case osVersion
+        case architecture
+        case hardwareClass
+        case memoryPressure
+        case thermalState
+        case powerState
+        case networkAvailability
+        case networkInterface
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        appVersion = try values.decode(String.self, forKey: .appVersion)
+        appBuild = try values.decode(String.self, forKey: .appBuild)
+        osVersion = try values.decode(String.self, forKey: .osVersion)
+        architecture = try values.decode(DiagnosticArchitecture.self, forKey: .architecture)
+        hardwareClass = try values.decode(DiagnosticHardwareClass.self, forKey: .hardwareClass)
+        memoryPressure = try values.decodeIfPresent(
+            DiagnosticMemoryPressure.self,
+            forKey: .memoryPressure
+        ) ?? .unknown
+        thermalState = try values.decodeIfPresent(
+            DiagnosticThermalState.self,
+            forKey: .thermalState
+        ) ?? .unknown
+        powerState = try values.decodeIfPresent(
+            DiagnosticPowerState.self,
+            forKey: .powerState
+        ) ?? .unknown
+        networkAvailability = try values.decode(
+            DiagnosticNetworkAvailability.self,
+            forKey: .networkAvailability
+        )
+        networkInterface = try values.decode(
+            DiagnosticNetworkInterface.self,
+            forKey: .networkInterface
+        )
     }
 }
 

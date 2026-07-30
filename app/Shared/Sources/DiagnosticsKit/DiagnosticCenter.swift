@@ -191,12 +191,24 @@ public actor DiagnosticCenter {
 
     public func setDetailedEnabled(_ enabled: Bool) async {
         if enabled {
-            policy = .detailed
-            detailedUntil = now().addingTimeInterval(configuration.detailedDuration)
+            await requestDetailedCapture(duration: configuration.detailedDuration)
         } else {
-            policy = .standard
-            detailedUntil = nil
+            await stopDetailedCapture()
         }
+    }
+
+    public func requestDetailedCapture(duration: TimeInterval) async {
+        guard duration > 0 else { return }
+        policy = .detailed
+        detailedUntil = now().addingTimeInterval(duration)
+        recordCenterEvent(name: .diagnosticModeChanged)
+        await publishStatus()
+    }
+
+    public func stopDetailedCapture() async {
+        policy = .standard
+        detailedUntil = nil
+        recordCenterEvent(name: .diagnosticModeChanged)
         await publishStatus()
     }
 
@@ -245,7 +257,49 @@ public actor DiagnosticCenter {
             diskEnabled = false
             warning = .storageUnavailable
         }
+        recordCenterEvent(name: .historyCleared)
         await publishStatus()
+    }
+
+    public func flush() async {
+        guard storeRunOpened, diskEnabled else { return }
+        do {
+            try await store.flush()
+        } catch {
+            diskEnabled = false
+            warning = .storageUnavailable
+            await publishStatus()
+        }
+    }
+
+    @discardableResult
+    public func export(
+        runIDs: [UUID],
+        to destination: URL
+    ) async throws -> ValidatedDiagnosticBundle {
+        let selectedRunIDs = Array(Set(runIDs)).sorted { $0.uuidString < $1.uuidString }
+        guard !selectedRunIDs.isEmpty else {
+            throw DiagnosticBundleError.invalidPackage
+        }
+
+        try await store.flush()
+        var snapshots: [DiagnosticStoreSnapshot] = []
+        snapshots.reserveCapacity(selectedRunIDs.count)
+        for runID in selectedRunIDs {
+            snapshots.append(try await store.snapshot(runID: runID))
+        }
+        do {
+            let result = try await DiagnosticBundleExporter(now: now).export(
+                snapshots: snapshots,
+                to: destination
+            )
+            await publishStatus()
+            return result
+        } catch let error as DiagnosticPrivacyViolation {
+            warning = .privacyAuditFailed
+            await publishStatus()
+            throw error
+        }
     }
 
     func ingest(_ event: DiagnosticEvent) async {
@@ -363,5 +417,20 @@ public actor DiagnosticCenter {
 
     private func publishStatus() async {
         statusContinuation.yield(await statusSnapshot())
+    }
+
+    private func recordCenterEvent(name: DiagnosticEventName) {
+        let context = DiagnosticContext(
+            appRunID: runID,
+            activityID: runID,
+            operationID: UUID()
+        )
+        emitter.record(.instant(
+            level: .info,
+            name: name,
+            context: context,
+            outcome: .success,
+            persistence: .essential
+        ))
     }
 }

@@ -265,7 +265,14 @@ struct SourceBrowserView: View {
         }
         .sheet(item: $selectedFile) { item in
             if let connectedSource = model.source(id: sourceID) {
-                VideoPlayerSheet(item: item, source: connectedSource.source)
+                let diagnostics = model.makePlaybackDiagnosticDependencies()
+                VideoPlayerSheet(
+                    item: item,
+                    source: connectedSource.source,
+                    diagnosticRecorder: diagnostics.recorder,
+                    diagnosticContext: diagnostics.context,
+                    identityProvider: diagnostics.identityProvider
+                )
             }
         }
     }
@@ -484,10 +491,22 @@ struct VideoPlayerSheet: View {
     @StateObject private var playerModel: VideoPlayerModel
     @Environment(\.dismiss) private var dismiss
 
-    init(item: MediaSourceItem, source: any MediaSource) {
+    init(
+        item: MediaSourceItem,
+        source: any MediaSource,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
+    ) {
         self.item = item
         self.source = source
-        _playerModel = StateObject(wrappedValue: VideoPlayerModel(item: item, source: source))
+        _playerModel = StateObject(wrappedValue: VideoPlayerModel(
+            item: item,
+            source: source,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: diagnosticContext,
+            identityProvider: identityProvider
+        ))
     }
 
     var body: some View {

@@ -6,6 +6,12 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    struct PlaybackDiagnosticDependencies {
+        let recorder: any DiagnosticRecording
+        let context: DiagnosticContext
+        let identityProvider: (any DiagnosticIdentityProviding)?
+    }
+
     struct ConnectedSource: Identifiable {
         let id: UUID
         let displayName: String
@@ -206,6 +212,19 @@ final class AppModel: ObservableObject {
 
     func source(id: UUID?) -> ConnectedSource? {
         sources.first { $0.id == id }
+    }
+
+    func makePlaybackDiagnosticDependencies() -> PlaybackDiagnosticDependencies {
+        PlaybackDiagnosticDependencies(
+            recorder: diagnosticRecorder,
+            context: DiagnosticContext(
+                appRunID: diagnosticContext.appRunID,
+                activityID: UUID(),
+                operationID: UUID(),
+                parentOperationID: diagnosticContext.operationID
+            ),
+            identityProvider: identityProvider
+        )
     }
 
     var mediaLibrarySources: [MediaLibrarySource] {
