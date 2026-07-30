@@ -89,6 +89,9 @@ public actor PlaybackCoordinator {
     private var finishTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
     private var finishedLanes: Set<RenderLane> = []
+    private var enqueuedLanes: Set<RenderLane> = []
+    // A paused system renderer may backpressure before the duration watermark.
+    private var saturatedLanes: Set<RenderLane> = []
     private var decodeFinished = false
 
     @MainActor
@@ -721,6 +724,8 @@ public actor PlaybackCoordinator {
         self.videoQueue = videoQueue
         self.audioQueue = audioQueue
         finishedLanes = []
+        enqueuedLanes = []
+        saturatedLanes = []
         decodeFinished = false
         finishTask?.cancel()
         finishTask = nil
@@ -854,9 +859,10 @@ public actor PlaybackCoordinator {
     ) async throws {
         while accepts(token) {
             if try await renderer.enqueueVideo(sample) {
-                await sampleWasEnqueued(token: token)
+                await sampleWasEnqueued(lane: .video, token: token)
                 return
             }
+            await laneReachedCapacity(.video, token: token)
             try await renderer.waitUntilReady(
                 for: .video,
                 requiredDuration: sample.duration
@@ -871,9 +877,10 @@ public actor PlaybackCoordinator {
     ) async throws {
         while accepts(token) {
             if try await renderer.enqueueAudio(sample) {
-                await sampleWasEnqueued(token: token)
+                await sampleWasEnqueued(lane: .audio, token: token)
                 return
             }
+            await laneReachedCapacity(.audio, token: token)
             try await renderer.waitUntilReady(
                 for: .audio,
                 requiredDuration: sample.duration
@@ -882,7 +889,25 @@ public actor PlaybackCoordinator {
         throw CancellationError()
     }
 
-    private func sampleWasEnqueued(token: PlaybackOperationToken) async {
+    private func sampleWasEnqueued(
+        lane: RenderLane,
+        token: PlaybackOperationToken
+    ) async {
+        guard accepts(token) else { return }
+        enqueuedLanes.insert(lane)
+        saturatedLanes.remove(lane)
+        await completeBufferingIfReady(token: token)
+    }
+
+    private func laneReachedCapacity(
+        _ lane: RenderLane,
+        token: PlaybackOperationToken
+    ) async {
+        guard accepts(token) else { return }
+        guard enqueuedLanes.contains(lane) else { return }
+        saturatedLanes.insert(lane)
+        let core = await stateMachine.snapshot
+        guard case .buffering = core.state else { return }
         await completeBufferingIfReady(token: token)
     }
 
@@ -892,9 +917,9 @@ public actor PlaybackCoordinator {
         guard case .buffering = core.state else { return }
         let renderState = await renderer.state
         let hasAudio = tracks.contains { $0.kind == .audio && $0.isSelected }
-        let videoReady = finishedLanes.contains(.video) ||
+        let videoReady = finishedLanes.contains(.video) || saturatedLanes.contains(.video) ||
             renderState.pendingVideoDuration >= configuration.startupVideoDuration
-        let audioReady = !hasAudio || finishedLanes.contains(.audio) ||
+        let audioReady = !hasAudio || finishedLanes.contains(.audio) || saturatedLanes.contains(.audio) ||
             renderState.pendingAudioDuration >= configuration.startupAudioDuration
         guard videoReady, audioReady else {
             return
@@ -952,10 +977,16 @@ public actor PlaybackCoordinator {
         let position = max(core.position, renderState.currentTime)
         if core.state == .playing, !decodeFinished {
             let hasAudio = tracks.contains { $0.kind == .audio && $0.isSelected }
+            let queuedVideoCount = await videoQueue?.snapshot.itemCount ?? 0
+            let queuedAudioCount = await audioQueue?.snapshot.itemCount ?? 0
             let videoUnderrun = !finishedLanes.contains(.video) &&
-                renderState.pendingVideoDuration < configuration.startupVideoDuration
+                !saturatedLanes.contains(.video) &&
+                queuedVideoCount == 0 &&
+                renderState.pendingVideoDuration < configuration.startupVideoDuration / 2
             let audioUnderrun = hasAudio && !finishedLanes.contains(.audio) &&
-                renderState.pendingAudioDuration < configuration.startupAudioDuration
+                !saturatedLanes.contains(.audio) &&
+                queuedAudioCount == 0 &&
+                renderState.pendingAudioDuration < configuration.startupAudioDuration / 2
             if videoUnderrun || audioUnderrun,
                await stateMachine.beginRebuffering(token: token, at: position) {
                 await renderer.freezeForUnderrun()
@@ -1041,6 +1072,8 @@ public actor PlaybackCoordinator {
         self.videoQueue = nil
         self.audioQueue = nil
         finishedLanes = []
+        enqueuedLanes = []
+        saturatedLanes = []
         decodeFinished = false
 
         producerTask?.cancel()
