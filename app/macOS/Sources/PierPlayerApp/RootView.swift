@@ -1,10 +1,24 @@
 import SMBSourceKit
 import SwiftUI
 
+enum SidebarDestination: Hashable {
+    case library
+    case source(UUID)
+
+    func reconciled(with sourceIDs: [UUID]) -> SidebarDestination {
+        switch self {
+        case .library:
+            return .library
+        case let .source(sourceID):
+            return sourceIDs.contains(sourceID) ? self : .library
+        }
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isAddingSource = false
-    @State private var selectedSourceID: UUID?
+    @State private var selectedDestination: SidebarDestination? = .library
 
     var body: some View {
         NavigationSplitView {
@@ -18,16 +32,18 @@ struct RootView: View {
             AddSMBSourceView(model: model)
         }
         .onChange(of: model.sources.map(\.id), initial: true) { _, sourceIDs in
-            if let selectedSourceID, sourceIDs.contains(selectedSourceID) {
-                return
-            }
-            selectedSourceID = sourceIDs.first
+            selectedDestination = destination.reconciled(with: sourceIDs)
         }
     }
 
     private var sourceSidebar: some View {
-        List(selection: $selectedSourceID) {
-            Section("Network Sources") {
+        List(selection: $selectedDestination) {
+            Section("Library") {
+                Label("Media Library", systemImage: "rectangle.stack.fill")
+                    .tag(SidebarDestination.library)
+            }
+
+            Section("File Sources") {
                 if model.isRestoring {
                     restoringRow
                 } else if model.sources.isEmpty {
@@ -35,7 +51,7 @@ struct RootView: View {
                 } else {
                     ForEach(model.sources) { source in
                         SourceSidebarRow(source: source)
-                            .tag(source.id)
+                            .tag(SidebarDestination.source(source.id))
                             .contextMenu {
                                 Button(role: .destructive) {
                                     removeSource(source.id)
@@ -55,17 +71,34 @@ struct RootView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if let selectedSourceID,
-           model.source(id: selectedSourceID) != nil {
+        switch destination {
+        case .library:
+            MediaLibraryView(
+                destination: destinationBinding,
+                addSource: { isAddingSource = true }
+            )
+        case let .source(sourceID) where model.source(id: sourceID) != nil:
             NavigationStack {
-                SourceBrowserView(sourceID: selectedSourceID, path: "/")
+                SourceBrowserView(sourceID: sourceID, path: "/")
             }
-            .id(selectedSourceID)
-        } else {
-            SourceWelcomeView {
-                isAddingSource = true
-            }
+            .id(sourceID)
+        case .source:
+            MediaLibraryView(
+                destination: destinationBinding,
+                addSource: { isAddingSource = true }
+            )
         }
+    }
+
+    private var destination: SidebarDestination {
+        selectedDestination ?? .library
+    }
+
+    private var destinationBinding: Binding<SidebarDestination> {
+        Binding(
+            get: { destination },
+            set: { selectedDestination = $0 }
+        )
     }
 
     private var restoringRow: some View {
@@ -163,23 +196,5 @@ private struct SourceSidebarRow: View {
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
-    }
-}
-
-private struct SourceWelcomeView: View {
-    let addSource: () -> Void
-
-    var body: some View {
-        ContentUnavailableView {
-            Label("Choose a Network Source", systemImage: "play.rectangle.on.rectangle")
-        } description: {
-            Text("Your SMB sources appear in the sidebar.")
-        } actions: {
-            Button(action: addSource) {
-                Label("Add Source", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .symbolRenderingMode(.hierarchical)
     }
 }
