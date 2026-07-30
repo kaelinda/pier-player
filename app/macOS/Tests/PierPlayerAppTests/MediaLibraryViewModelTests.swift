@@ -9,14 +9,14 @@ import Testing
 struct MediaLibraryViewModelTests {
     @Test func reloadCombinesSuccessfulSources() async {
         let first = source(named: "First NAS", videoPath: "/first.mp4")
-        let second = source(named: "Second NAS", videoPath: "/second.mkv")
+        let second = source(named: "Second NAS", videoPath: "/second.mov")
         let viewModel = MediaLibraryViewModel()
 
         await viewModel.reload(sources: [first, second])
 
         #expect(
             viewModel.snapshot.items.map(\.media.path).sorted()
-                == ["/first.mp4", "/second.mkv"]
+                == ["/first.mp4", "/second.mov"]
         )
         #expect(viewModel.snapshot.failures.isEmpty)
         #expect(!viewModel.isLoading)

@@ -189,6 +189,28 @@ func populatedMediaLibraryRenders(
 }
 
 @MainActor
+@Test func videoPlayerSheetRendersPreparingState() throws {
+    let size = CGSize(width: 960, height: 640)
+    let item = MediaSourceItem(
+        name: "Large Fixture.mp4",
+        path: "/Movies/Large Fixture.mp4",
+        kind: .file,
+        size: 8 * 1024 * 1024 * 1024,
+        modifiedAt: nil
+    )
+    let image = try render(
+        VideoPlayerSheet(item: item, source: SuspendedRenderingMediaSource())
+            .tint(.teal)
+            .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    try writeSnapshotIfRequested(image, name: "video-player-preparing")
+}
+
+@MainActor
 private func render<Content: View>(_ content: Content, at size: CGSize) throws -> NSImage {
     let hostingView = NSHostingView(rootView: content)
     hostingView.frame = NSRect(origin: .zero, size: size)
@@ -341,4 +363,21 @@ private func mediaLibraryFixture() -> (
         ),
         sources
     )
+}
+
+private actor SuspendedRenderingMediaSource: MediaSource {
+    nonisolated let id = UUID()
+    nonisolated let displayName = "Rendering Source"
+
+    func connect() async throws {}
+    func disconnect() async {}
+
+    func list(directory path: String) async throws -> [MediaSourceItem] {
+        []
+    }
+
+    func open(file path: String) async throws -> any MediaReadableFile {
+        try await Task.sleep(for: .seconds(60))
+        throw CancellationError()
+    }
 }

@@ -6,74 +6,71 @@ import SwiftUI
 @MainActor
 final class VideoPlayerModel: ObservableObject {
     let item: MediaSourceItem
-    let source: SMBMediaSource
+    let source: any MediaSource
 
-    @Published var phase: Phase = .downloading(progress: 0)
-    @Published var localURL: URL?
-    @Published var downloadedByteCount: Int64 = 0
+    @Published private(set) var phase: Phase = .preparing
+    @Published private(set) var player: AVPlayer?
 
     enum Phase: Equatable {
-        case downloading(progress: Double)
+        case preparing
         case playing
         case failed(String)
     }
 
-    private var tempFileURL: URL?
+    private let sessionFactory: VideoPlaybackSessionFactory
+    private var playbackSession: (any VideoPlaybackSession)?
 
-    init(item: MediaSourceItem, source: SMBMediaSource) {
+    init(
+        item: MediaSourceItem,
+        source: any MediaSource,
+        sessionFactory: @escaping VideoPlaybackSessionFactory = { file, fileName in
+            try ProgressivePlaybackSession(file: file, fileName: fileName)
+        }
+    ) {
         self.item = item
         self.source = source
+        self.sessionFactory = sessionFactory
     }
 
     func start() async {
-        phase = .downloading(progress: 0)
-        downloadedByteCount = 0
+        await stop()
+        phase = .preparing
 
         do {
             let file = try await source.open(file: item.path)
-            let fileSize = file.identity.size
-            let tempDirectory = FileManager.default.temporaryDirectory
-            let safeName = item.name
-                .replacingOccurrences(of: "/", with: "_")
-                .replacingOccurrences(of: " ", with: "_")
-            let tempURL = tempDirectory.appendingPathComponent(
-                "PierPlayer-\(UUID().uuidString.prefix(8))-\(safeName)"
-            )
-            tempFileURL = tempURL
 
-            var allData = Data()
-            var downloaded: Int64 = 0
-            let chunkSize = 1 * 1024 * 1024
-
-            while downloaded < fileSize {
+            let session: any VideoPlaybackSession
+            do {
                 try Task.checkCancellation()
-                let remaining = fileSize - downloaded
-                let readSize = min(Int64(chunkSize), remaining)
-                let data = try await file.read(at: downloaded, length: Int(readSize))
-                if data.isEmpty { break }
-                allData.append(data)
-                downloaded += Int64(data.count)
-                downloadedByteCount = downloaded
-                let progress = fileSize > 0 ? Double(downloaded) / Double(fileSize) : 1
-                phase = .downloading(progress: min(progress, 1))
+                session = try sessionFactory(file, item.name)
+            } catch {
+                await file.close()
+                throw error
             }
 
-            try allData.write(to: tempURL)
-            localURL = tempURL
+            do {
+                try Task.checkCancellation()
+            } catch {
+                await session.stop()
+                throw error
+            }
+
+            playbackSession = session
+            player = session.player
             phase = .playing
+            session.play()
         } catch is CancellationError {
-            cleanup()
+            return
         } catch {
             phase = .failed(String(describing: error))
-            cleanup()
         }
     }
 
-    func cleanup() {
-        if let tempFileURL {
-            try? FileManager.default.removeItem(at: tempFileURL)
-        }
-        tempFileURL = nil
+    func stop() async {
+        let session = playbackSession
+        playbackSession = nil
+        player = nil
+        await session?.stop()
     }
 }
 
@@ -204,7 +201,7 @@ struct SourceBrowserView: View {
             )) {
                 MediaItemRow(item: item)
             }
-        } else if item.isSupportedVideo {
+        } else if isPlayableVideo(item) {
             Button {
                 selectedFile = item
             } label: {
@@ -230,6 +227,10 @@ struct SourceBrowserView: View {
 
     private var itemCountLabel: String {
         items.count == 1 ? "1 Item" : "\(items.count) Items"
+    }
+
+    private func isPlayableVideo(_ item: MediaSourceItem) -> Bool {
+        item.kind == .file && AVFoundationMediaType(fileName: item.name) != nil
     }
 
     private func load() async {
@@ -297,13 +298,13 @@ private struct MediaItemRow: View {
 
     private var iconName: String {
         if item.kind == .directory { return "folder.fill" }
-        if item.isSupportedVideo { return "film.fill" }
+        if isPlayableVideo { return "film.fill" }
         return "doc.fill"
     }
 
     private var iconColor: Color {
         if item.kind == .directory { return .teal }
-        if item.isSupportedVideo { return .orange }
+        if isPlayableVideo { return .orange }
         return .secondary
     }
 
@@ -311,7 +312,11 @@ private struct MediaItemRow: View {
         if item.kind == .directory { return "Folder" }
         let fileExtension = (item.name as NSString).pathExtension.uppercased()
         guard !fileExtension.isEmpty else { return "File" }
-        return item.isSupportedVideo ? "\(fileExtension) Video" : "\(fileExtension) File"
+        return isPlayableVideo ? "\(fileExtension) Video" : "\(fileExtension) File"
+    }
+
+    private var isPlayableVideo: Bool {
+        item.kind == .file && AVFoundationMediaType(fileName: item.name) != nil
     }
 
     private var sizeLabel: String? {
@@ -322,12 +327,12 @@ private struct MediaItemRow: View {
 
 struct VideoPlayerSheet: View {
     let item: MediaSourceItem
-    let source: SMBMediaSource
+    let source: any MediaSource
 
     @StateObject private var playerModel: VideoPlayerModel
     @Environment(\.dismiss) private var dismiss
 
-    init(item: MediaSourceItem, source: SMBMediaSource) {
+    init(item: MediaSourceItem, source: any MediaSource) {
         self.item = item
         self.source = source
         _playerModel = StateObject(wrappedValue: VideoPlayerModel(item: item, source: source))
@@ -345,7 +350,9 @@ struct VideoPlayerSheet: View {
             await playerModel.start()
         }
         .onDisappear {
-            playerModel.cleanup()
+            Task {
+                await playerModel.stop()
+            }
         }
     }
 
@@ -388,7 +395,7 @@ struct VideoPlayerSheet: View {
     @ViewBuilder
     private var playerContent: some View {
         switch playerModel.phase {
-        case .downloading(let progress):
+        case .preparing:
             VStack(spacing: 20) {
                 ZStack {
                     Circle()
@@ -403,25 +410,22 @@ struct VideoPlayerSheet: View {
                     Text("Preparing Video")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text(downloadProgressLabel(progress))
+                    Text("Opening the remote media stream")
                         .font(.callout)
                         .foregroundStyle(.white.opacity(0.62))
-                        .monospacedDigit()
                 }
 
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
+                ProgressView()
+                    .controlSize(.regular)
                     .tint(.teal)
-                    .frame(width: 360)
-                    .accessibilityLabel("Download Progress")
-                    .accessibilityValue("\(Int(progress * 100)) percent")
+                    .accessibilityLabel("Opening Video")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .black))
 
         case .playing:
-            if let localURL = playerModel.localURL {
-                VideoPlayerView(url: localURL)
+            if let player = playerModel.player {
+                VideoPlayerView(player: player)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
             } else {
@@ -433,17 +437,6 @@ struct VideoPlayerSheet: View {
         }
     }
 
-    private func downloadProgressLabel(_ progress: Double) -> String {
-        let downloaded = ByteCountFormatter.string(
-            fromByteCount: playerModel.downloadedByteCount,
-            countStyle: .file
-        )
-        guard let total = item.size else {
-            return "\(downloaded) downloaded"
-        }
-        let totalLabel = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
-        return "\(downloaded) of \(totalLabel)  ·  \(Int(progress * 100))%"
-    }
 }
 
 private struct PlayerFailureView: View {
@@ -470,16 +463,24 @@ private struct PlayerFailureView: View {
 }
 
 struct VideoPlayerView: NSViewRepresentable {
-    let url: URL
+    let player: AVPlayer
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = .floating
-        view.player = AVPlayer(url: url)
+        view.player = player
         return view
     }
 
-    func updateNSView(_ nsView: AVPlayerView, context: Context) {}
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player !== player {
+            nsView.player = player
+        }
+    }
+
+    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
+        nsView.player = nil
+    }
 }
 
 struct BrowserDestination: Hashable, Identifiable {

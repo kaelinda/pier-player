@@ -6,7 +6,7 @@ import Testing
 
 @Suite("MediaLibraryScannerTests")
 struct MediaLibraryScannerTests {
-    @Test func scanIncludesOnlySupportedVideoFiles() async throws {
+    @Test func scanIncludesOnlyPlayableAVFoundationVideoFiles() async throws {
         let sourceID = UUID()
         let source = MediaLibrarySource(
             id: sourceID,
@@ -15,6 +15,8 @@ struct MediaLibraryScannerTests {
                 #expect(path == "/")
                 return [
                     mediaItem(name: "movie.mp4", path: "/movie.mp4"),
+                    mediaItem(name: "clip.M4V", path: "/clip.M4V"),
+                    mediaItem(name: "trailer.mov", path: "/trailer.mov"),
                     mediaItem(name: "FEATURE.MKV", path: "/FEATURE.MKV"),
                     mediaItem(name: "notes.txt", path: "/notes.txt"),
                     mediaItem(name: "archive.avi", path: "/archive.avi"),
@@ -24,7 +26,12 @@ struct MediaLibraryScannerTests {
 
         let result = try await MediaLibraryScanner().scan(source: source)
 
-        #expect(result.items.map(\.media.path) == ["/movie.mp4", "/FEATURE.MKV"])
+        #expect(
+            result.items.map(\.media.path) == [
+                "/movie.mp4",
+                "/clip.M4V",
+                "/trailer.mov",
+            ])
         #expect(result.items.allSatisfy { $0.sourceID == sourceID })
         #expect(result.items.allSatisfy { $0.sourceName == "Living Room NAS" })
         #expect(result.failure == nil)
@@ -50,7 +57,7 @@ struct MediaLibraryScannerTests {
             ],
             "/alpha/one/two": [
                 directoryItem(name: "too-deep", path: "/alpha/one/two/too-deep"),
-                mediaItem(name: "deep.mkv", path: "/alpha/one/two/deep.mkv"),
+                mediaItem(name: "deep.mov", path: "/alpha/one/two/deep.mov"),
             ],
             "/alpha/one/two/too-deep": [
                 mediaItem(name: "excluded.mp4", path: "/alpha/one/two/too-deep/excluded.mp4")
@@ -76,7 +83,7 @@ struct MediaLibraryScannerTests {
                 "/root.mp4",
                 "/alpha/alpha.mov",
                 "/beta/beta.m4v",
-                "/alpha/one/two/deep.mkv",
+                "/alpha/one/two/deep.mov",
             ])
     }
 
