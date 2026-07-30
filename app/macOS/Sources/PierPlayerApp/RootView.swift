@@ -24,10 +24,10 @@ struct RootView: View {
         NavigationSplitView {
             sourceSidebar
                 .navigationTitle("Pier Player")
+                .navigationSplitViewColumnWidth(min: 224, ideal: 252, max: 320)
         } detail: {
             detailContent
         }
-        .navigationSplitViewColumnWidth(min: 224, ideal: 252, max: 320)
         .sheet(isPresented: $isAddingSource) {
             AddSMBSourceView(model: model)
         }
