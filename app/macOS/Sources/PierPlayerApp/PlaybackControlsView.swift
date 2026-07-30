@@ -2,14 +2,29 @@ import AppKit
 import PlaybackCore
 import SwiftUI
 
+enum PlaybackControlCopy {
+    static func timeLabel(_ time: TimeInterval) -> String {
+        guard time.isFinite, time >= 0 else { return "0:00" }
+        let seconds = Int(time.rounded(.down))
+        let hours = seconds / 3_600
+        let minutes = (seconds % 3_600) / 60
+        let remainingSeconds = seconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        }
+        return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+}
+
 struct PlaybackControlsView: View {
     @ObservedObject var model: VideoPlayerModel
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 10) {
-                Text(timeLabel(model.position))
-                    .frame(width: 54, alignment: .trailing)
+                Text(PlaybackControlCopy.timeLabel(model.position))
+                    .frame(width: 64, alignment: .trailing)
                 Slider(
                     value: Binding(
                         get: { model.position },
@@ -19,20 +34,23 @@ struct PlaybackControlsView: View {
                     onEditingChanged: scrubStateChanged
                 )
                 .accessibilityLabel("Playback Position")
-                Text(timeLabel(model.snapshot.duration))
-                    .frame(width: 54, alignment: .leading)
+                Text(PlaybackControlCopy.timeLabel(model.snapshot.duration))
+                    .frame(width: 64, alignment: .leading)
             }
             .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white.opacity(0.68))
 
             HStack(spacing: 12) {
                 Button {
                     Task { await model.togglePlayback() }
                 } label: {
                     Image(systemName: model.snapshot.intendsToPlay ? "pause.fill" : "play.fill")
-                        .frame(width: 22, height: 22)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Color.teal.opacity(0.9), in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlayerChromeButtonStyle())
                 .help(model.snapshot.intendsToPlay ? "Pause" : "Play")
                 .accessibilityLabel(model.snapshot.intendsToPlay ? "Pause" : "Play")
 
@@ -40,9 +58,10 @@ struct PlaybackControlsView: View {
                     model.toggleMute()
                 } label: {
                     Image(systemName: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .frame(width: 22, height: 22)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: 30, height: 30)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlayerChromeButtonStyle())
                 .help(model.isMuted ? "Unmute" : "Mute")
                 .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
 
@@ -81,17 +100,23 @@ struct PlaybackControlsView: View {
                     NSApp.keyWindow?.toggleFullScreen(nil)
                 } label: {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .frame(width: 22, height: 22)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: 30, height: 30)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlayerChromeButtonStyle())
                 .help("Toggle Full Screen")
                 .accessibilityLabel("Toggle Full Screen")
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .frame(minHeight: 74)
-        .background(.bar)
+        .frame(minHeight: 78)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(.white.opacity(0.08))
+                .frame(height: 1)
+        }
     }
 
     private func scrubStateChanged(_ editing: Bool) {
@@ -126,6 +151,8 @@ struct PlaybackControlsView: View {
             }
         } label: {
             Label(title, systemImage: icon)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.white.opacity(0.86))
                 .lineLimit(1)
         }
         .menuStyle(.borderlessButton)
@@ -136,10 +163,19 @@ struct PlaybackControlsView: View {
     private func trackLabel(_ track: PlaybackTrack) -> String {
         track.title ?? track.language?.uppercased() ?? track.codecName.uppercased()
     }
+}
 
-    private func timeLabel(_ time: TimeInterval) -> String {
-        guard time.isFinite, time >= 0 else { return "0:00" }
-        let seconds = Int(time.rounded(.down))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+struct PlayerChromeButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Circle())
+            .opacity(configuration.isPressed ? 0.72 : 1)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.1),
+                value: configuration.isPressed
+            )
     }
 }

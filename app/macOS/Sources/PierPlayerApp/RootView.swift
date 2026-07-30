@@ -150,9 +150,10 @@ struct RootSidebarContent: View {
 
     private var sidebarFooter: some View {
         HStack(spacing: 9) {
-            Circle()
-                .fill(sources.isEmpty ? Color.secondary : Color.green)
-                .frame(width: 7, height: 7)
+            Image(systemName: sources.isEmpty ? "externaldrive" : "externaldrive.connected.to.line.below")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(sources.isEmpty ? Color.secondary : Color.teal)
+                .frame(width: 16)
 
             Text(sourceCountLabel)
                 .font(.caption)
@@ -181,7 +182,7 @@ struct RootSidebarContent: View {
 
     private var sourceCountLabel: String {
         switch sources.count {
-        case 0: "Offline"
+        case 0: "No Sources"
         case 1: "1 Source"
         default: "\(sources.count) Sources"
         }
@@ -194,7 +195,7 @@ private struct SourceSidebarRow: View {
     var body: some View {
         HStack(spacing: 10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.teal.opacity(0.14))
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .font(.system(size: 14, weight: .medium))

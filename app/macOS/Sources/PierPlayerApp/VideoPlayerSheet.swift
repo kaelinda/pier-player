@@ -34,15 +34,19 @@ struct VideoPlayerSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            playerHeader
-            Divider()
+        ZStack {
             playerStage
-            Divider()
-            PlaybackControlsView(model: playerModel)
+
+            VStack(spacing: 0) {
+                playerHeader
+                Spacer(minLength: 0)
+                PlaybackControlsView(model: playerModel)
+            }
         }
         .frame(minWidth: 760, idealWidth: 960, minHeight: 520, idealHeight: 640)
         .background(Color.black)
+        .tint(.teal)
+        .environment(\.colorScheme, .dark)
         .task {
             await playerModel.start()
         }
@@ -54,7 +58,7 @@ struct VideoPlayerSheet: View {
     private var playerHeader: some View {
         HStack(spacing: 11) {
             Image(systemName: "film.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(.teal)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -75,26 +79,33 @@ struct VideoPlayerSheet: View {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .frame(width: 24, height: 24)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 30, height: 30)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PlayerChromeButtonStyle())
             .help("Close Player")
             .accessibilityLabel("Close Player")
             .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 16)
-        .frame(height: 54)
-        .background(.bar)
+        .frame(height: 56)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(.white.opacity(0.08))
+                .frame(height: 1)
+        }
     }
 
     private var playerStage: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             VideoSurfaceView(displayLayer: playerModel.renderer.displayLayer)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             SubtitleOverlayView(text: playerModel.snapshot.subtitleText)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+                .padding(.bottom, 104)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
             stateOverlay
         }
@@ -116,7 +127,7 @@ struct VideoPlayerSheet: View {
             .foregroundStyle(.white)
             .padding(14)
             .background(.black.opacity(0.68))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         case .failed(let message):
             PlayerFailureView(message: message)
         default:

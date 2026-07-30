@@ -88,6 +88,29 @@ import Testing
 }
 
 @MainActor
+@Test func coordinatorStartsMP4WithProductionBuffering() async throws {
+    let file = try PlaybackTestFile(fixture: "video-h264-aac.mp4")
+    let renderer = SampleBufferRenderer()
+    let coordinator = PlaybackCoordinator(renderer: renderer)
+
+    try await coordinator.start(file: file)
+    try await waitForCoordinator(coordinator, timeout: 5) {
+        $0.state == .playing
+    }
+    try await waitForCoordinator(coordinator, timeout: 2) {
+        $0.position >= 0.2
+    }
+
+    #expect(
+        await coordinator.snapshot.position >= 0.2,
+        "renderer state: \(renderer.state)"
+    )
+    #expect(await coordinator.snapshot.failure == nil)
+    await coordinator.stop()
+    #expect(file.closeCount == 1)
+}
+
+@MainActor
 @Test func coordinatorDrainsEOFAndRejectsStaleRapidSeekWork() async throws {
     let file = try PlaybackTestFile(fixture: "video-h264-aac.mkv")
     let renderer = SampleBufferRenderer(maximumPendingDuration: 3)
