@@ -158,9 +158,12 @@ public actor PlaybackCoordinator {
         let token = try await stateMachine.seek(to: position)
         currentToken = token
         await cancelGenerationTasks()
+        guard accepts(token) else { throw CancellationError() }
         await renderer.flush(at: position)
+        guard accepts(token) else { throw CancellationError() }
         await publishSnapshot()
 
+        guard accepts(token) else { throw CancellationError() }
         _ = try await resources.executor.seek(to: position)
         guard accepts(token) else { throw CancellationError() }
         launchGeneration(token: token, executor: resources.executor)
@@ -174,7 +177,9 @@ public actor PlaybackCoordinator {
         let token = try await stateMachine.seek(to: position)
         currentToken = token
         await cancelGenerationTasks()
+        guard accepts(token) else { throw CancellationError() }
         await renderer.flush(at: position)
+        guard accepts(token) else { throw CancellationError() }
         _ = try await resources.executor.selectAudioTrack(index: index, at: position)
         guard accepts(token) else { throw CancellationError() }
         tracks = tracks.map {
@@ -463,20 +468,28 @@ public actor PlaybackCoordinator {
     }
 
     private func cancelGenerationTasks() async {
+        let producerTask = self.producerTask
+        let videoConsumerTask = self.videoConsumerTask
+        let audioConsumerTask = self.audioConsumerTask
+        let finishTask = self.finishTask
+        let videoQueue = self.videoQueue
+        let audioQueue = self.audioQueue
+
+        self.producerTask = nil
+        self.videoConsumerTask = nil
+        self.audioConsumerTask = nil
+        self.finishTask = nil
+        self.videoQueue = nil
+        self.audioQueue = nil
+        finishedConsumerCount = 0
+        decodeFinished = false
+
         producerTask?.cancel()
         videoConsumerTask?.cancel()
         audioConsumerTask?.cancel()
         finishTask?.cancel()
-        producerTask = nil
-        videoConsumerTask = nil
-        audioConsumerTask = nil
-        finishTask = nil
         if let videoQueue { await videoQueue.close() }
         if let audioQueue { await audioQueue.close() }
-        videoQueue = nil
-        audioQueue = nil
-        finishedConsumerCount = 0
-        decodeFinished = false
     }
 
     private func fail(_ failure: PlaybackFailure) async {
