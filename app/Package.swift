@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "PlaybackTelemetry", targets: ["PlaybackTelemetry"]),
         .library(name: "SMBSourceKit", targets: ["SMBSourceKit"]),
         .library(name: "FFmpegKit", targets: ["FFmpegKit"]),
+        .library(name: "RenderKit", targets: ["RenderKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
     ],
@@ -76,6 +77,16 @@ let package = Package(
             dependencies: ["PierFFmpeg", "MediaSourceKit", "StreamIOKit"],
             path: "Shared/Sources/FFmpegKit"
         ),
+        .target(
+            name: "RenderKit",
+            dependencies: ["FFmpegKit"],
+            path: "Shared/Sources/RenderKit",
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo"),
+            ]
+        ),
         .executableTarget(
             name: "PierPlayerApp",
             dependencies: [
@@ -125,6 +136,11 @@ let package = Package(
             name: "FFmpegKitTests",
             dependencies: ["FFmpegKit", "MediaSourceKit", "StreamIOKit"],
             path: "Shared/Tests/FFmpegKitTests"
+        ),
+        .testTarget(
+            name: "RenderKitTests",
+            dependencies: ["RenderKit", "FFmpegKit"],
+            path: "Shared/Tests/RenderKitTests"
         ),
         .testTarget(
             name: "PierPlayerAppTests",
