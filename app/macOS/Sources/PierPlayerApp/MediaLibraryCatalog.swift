@@ -32,9 +32,11 @@ struct MediaLibraryScanLimits: Equatable, Sendable {
     }
 }
 
-struct MediaLibraryScanFailure: Equatable, Sendable {
+struct MediaLibraryScanFailure: Identifiable, Equatable, Sendable {
     let sourceID: UUID
     let sourceName: String
+
+    var id: UUID { sourceID }
 }
 
 struct MediaLibraryScanResult: Equatable, Sendable {

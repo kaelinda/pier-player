@@ -124,10 +124,12 @@ struct MediaLibraryScannerTests {
         }
 
         let result = try await MediaLibraryScanner().scan(source: source)
+        let failure = try #require(result.failure)
 
         #expect(result.items.map(\.media.path) == ["/kept.mp4"])
-        #expect(result.failure?.sourceID == sourceID)
-        #expect(result.failure?.sourceName == "Private NAS")
+        #expect(failure.id == sourceID)
+        #expect(failure.sourceID == sourceID)
+        #expect(failure.sourceName == "Private NAS")
     }
 
     @Test func cancellationPropagatesAndStopsFurtherDirectoryReads() async {
@@ -141,7 +143,7 @@ struct MediaLibraryScannerTests {
                     directoryItem(name: "second", path: "/second"),
                 ]
             case "/first":
-                try await Task.sleep(for: .seconds(60))
+                try await Task.sleep(for: .milliseconds(250))
                 return []
             default:
                 return []
@@ -151,7 +153,11 @@ struct MediaLibraryScannerTests {
             try await MediaLibraryScanner().scan(source: source)
         }
 
-        await reads.waitUntilRead("/first")
+        let reachedFirstDirectory = await reads.waitUntilRead(
+            "/first",
+            timeout: .seconds(1)
+        )
+        #expect(reachedFirstDirectory)
         task.cancel()
 
         await #expect(throws: CancellationError.self) {
@@ -188,25 +194,24 @@ struct MediaLibraryScannerTests {
 
 private actor DirectoryReadRecorder {
     private var paths: [String] = []
-    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
     func record(_ path: String) {
         paths.append(path)
-        let pendingWaiters = waiters.removeValue(forKey: path) ?? []
-        for waiter in pendingWaiters {
-            waiter.resume()
-        }
     }
 
     func snapshot() -> [String] {
         paths
     }
 
-    func waitUntilRead(_ path: String) async {
-        guard !paths.contains(path) else { return }
-        await withCheckedContinuation { continuation in
-            waiters[path, default: []].append(continuation)
+    func waitUntilRead(_ path: String, timeout: Duration) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+
+        while !paths.contains(path), clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
         }
+
+        return paths.contains(path)
     }
 }
 
