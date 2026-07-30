@@ -62,6 +62,16 @@ public final class SampleBufferRenderer {
         return time.isNumeric ? max(0, time.seconds) : 0
     }
 
+    public var volume: Float {
+        get { audioRenderer.volume }
+        set { audioRenderer.volume = min(max(newValue, 0), 1) }
+    }
+
+    public var isMuted: Bool {
+        get { audioRenderer.isMuted }
+        set { audioRenderer.isMuted = newValue }
+    }
+
     @discardableResult
     public func enqueueVideo(_ sample: CMSampleBuffer) -> Bool {
         guard canEnqueue(sample, lastEndTime: lastVideoEndTime),

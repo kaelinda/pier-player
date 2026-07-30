@@ -107,6 +107,8 @@ let package = Package(
                 "StreamIOKit",
                 "PlaybackCore",
                 "PlaybackTelemetry",
+                "FFmpegKit",
+                "RenderKit",
                 "SMBSourceKit",
             ],
             path: "macOS/Sources/PierPlayerApp"
@@ -162,7 +164,13 @@ let package = Package(
         ),
         .testTarget(
             name: "PierPlayerAppTests",
-            dependencies: ["PierPlayerApp"],
+            dependencies: [
+                "PierPlayerApp",
+                "FFmpegKit",
+                "MediaSourceKit",
+                "PlaybackCore",
+                "RenderKit",
+            ],
             path: "macOS/Tests/PierPlayerAppTests"
         ),
     ]

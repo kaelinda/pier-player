@@ -1,4 +1,7 @@
 import AppKit
+import MediaSourceKit
+import PlaybackCore
+import RenderKit
 import SwiftUI
 import Testing
 @testable import PierPlayerApp
@@ -32,6 +35,40 @@ import Testing
     #expect(image.size == size)
     #expect(image.tiffRepresentation?.isEmpty == false)
     try writeSnapshotIfRequested(image, name: "add-source-sheet")
+}
+
+@MainActor
+@Test(arguments: [
+    CGSize(width: 760, height: 520),
+    CGSize(width: 1_180, height: 760),
+])
+func playerRendersLongMetadataAtSupportedSizes(size: CGSize) async throws {
+    let item = testVideoItem()
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: item,
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
+    await model.start()
+    coordinator.send(snapshot(
+        state: .buffering(.seek),
+        tracks: [
+            PlaybackTrack(index: 1, kind: .audio, codecName: "aac", language: "jpn", title: "Japanese lossless commentary track with a long title", isSelected: true),
+            PlaybackTrack(index: 2, kind: .subtitle, codecName: "subrip", language: "eng", title: "English signs and dialogue with a long title", isSelected: true),
+        ]
+    ))
+    try await waitForModel(model) { $0.state == .buffering(.seek) }
+    let image = try render(
+        VideoPlayerSheet(item: item, playerModel: model)
+            .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    try writeSnapshotIfRequested(image, name: "player-\(Int(size.width))")
 }
 
 @MainActor
