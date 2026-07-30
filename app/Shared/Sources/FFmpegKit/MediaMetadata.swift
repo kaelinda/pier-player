@@ -78,7 +78,7 @@ public struct FFmpegProbeLimits: Equatable, Sendable {
     }
 
     public static let `default` = FFmpegProbeLimits(
-        maximumBytes: 5 * 1024 * 1024,
-        maximumDuration: 5
+        maximumBytes: 32 * 1024 * 1024,
+        maximumDuration: 15
     )
 }

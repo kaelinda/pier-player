@@ -6,6 +6,7 @@ import Testing
 @Test func representativeFormatsDecodeVideoAndNormalizedAudio() throws {
     for fileName in [
         "video-h264-aac.mkv",
+        "video-h264-aac-zlib.mkv",
         "video-h264-aac.mp4",
         "video-vp9-opus.webm",
         "video-mpeg4-mp3.avi",

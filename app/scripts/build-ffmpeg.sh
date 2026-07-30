@@ -31,6 +31,8 @@ configure_flags=(
     --enable-pic
     --enable-static
     --disable-shared
+    --enable-zlib
+    --enable-bzlib
     --enable-videotoolbox
     --enable-audiotoolbox
 )
@@ -80,7 +82,7 @@ dylibs=()
 for architecture in arm64 x86_64; do
     architecture_build="$build_root/build-$architecture"
     prefix="$build_root/prefix-$architecture"
-    architecture_flags=()
+    architecture_flags=(--arch="$architecture")
     if [[ "$architecture" == "x86_64" ]]; then
         architecture_flags+=(--disable-x86asm)
     fi
@@ -95,7 +97,6 @@ for architecture in arm64 x86_64; do
             "$source_dir/configure" \
                 --prefix="$prefix" \
                 --target-os=darwin \
-                --arch="$architecture" \
                 --cc="xcrun -sdk macosx clang -arch $architecture" \
                 --extra-cflags="-mmacosx-version-min=$deployment_target" \
                 --extra-ldflags="-mmacosx-version-min=$deployment_target" \
@@ -145,6 +146,8 @@ for architecture in arm64 x86_64; do
         -framework CoreMedia \
         -framework CoreVideo \
         -framework CoreServices \
+        -lz \
+        -lbz2 \
         -lm \
         -o "$dylib"
     strip -x "$dylib"

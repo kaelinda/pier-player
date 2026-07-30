@@ -4,9 +4,16 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 app_dir="$(cd "$script_dir/.." && pwd)"
 fixture_dir="$app_dir/Shared/Tests/Fixtures"
+temporary_dir="$(mktemp -d /tmp/pier-media-fixtures.XXXXXX)"
+trap 'rm -rf "$temporary_dir"' EXIT
 
 command -v ffmpeg >/dev/null || {
     echo "generate-media-fixtures: ffmpeg is required for fixture authoring" >&2
+    exit 1
+}
+mkvmerge="${MKVMERGE:-mkvmerge}"
+command -v "$mkvmerge" >/dev/null || {
+    echo "generate-media-fixtures: mkvmerge is required for fixture authoring" >&2
     exit 1
 }
 
@@ -65,16 +72,45 @@ ffmpeg -hide_banner -loglevel error -y \
     -metadata:s:s:0 language=eng -disposition:s:0 default \
     "$fixture_dir/video-h264-aac-srt.mkv"
 
+"$mkvmerge" --quiet \
+    --deterministic pier-player-zlib \
+    --output "$temporary_dir/video-h264-aac-zlib.mkv" \
+    --compression 0:zlib \
+    --compression 1:zlib \
+    "$fixture_dir/video-h264-aac.mkv"
+cp "$temporary_dir/video-h264-aac-zlib.mkv" \
+    "$fixture_dir/video-h264-aac-zlib.mkv"
+
+dd if=/dev/zero of="$temporary_dir/attachment.bin" bs=1048576 count=6 2>/dev/null
+ffmpeg -hide_banner -loglevel error -y \
+    -i "$fixture_dir/video-h264-aac.mkv" \
+    -map 0 -c copy \
+    -attach "$temporary_dir/attachment.bin" \
+    -metadata:s:t mimetype=application/octet-stream \
+    "$temporary_dir/video-h264-aac-large-attachment.mkv"
+swift -e '
+import Foundation
+let input = URL(fileURLWithPath: CommandLine.arguments[1])
+let output = URL(fileURLWithPath: CommandLine.arguments[2])
+let data = try Data(contentsOf: input)
+let compressed = try (data as NSData).compressed(using: .zlib) as Data
+try compressed.write(to: output)
+' \
+    "$temporary_dir/video-h264-aac-large-attachment.mkv" \
+    "$fixture_dir/video-h264-aac-large-attachment.mkv.zlib"
+
 (
     cd "$fixture_dir"
     shasum -a 256 \
         video-h264-aac.mkv \
+        video-h264-aac-zlib.mkv \
         video-h264-aac.mp4 \
         video-longer-than-audio.mkv \
         video-vp9-opus.webm \
         video-mpeg4-mp3.avi \
         video-mpeg2-ac3.ts \
         video-h264-aac-srt.mkv \
+        video-h264-aac-large-attachment.mkv.zlib \
         video-h264-aac.en.srt \
         video-h264-aac.ass \
         > SHA256SUMS

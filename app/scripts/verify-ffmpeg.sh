@@ -28,6 +28,10 @@ for forbidden in --enable-gpl --enable-nonfree --enable-libx264 --enable-libx265
     fi
 done
 
+for required in --enable-zlib --enable-bzlib; do
+    grep -Fq -- "$required" "$metadata" || fail "missing configure flag: $required"
+done
+
 architectures="$(lipo -archs "$binary")"
 [[ "$architectures" == *arm64* && "$architectures" == *x86_64* ]] || {
     fail "expected arm64 and x86_64, got: $architectures"
@@ -95,6 +99,11 @@ runtime_configuration="$(sed -n '3p' <<<"$runtime_output")"
 }
 for forbidden in --enable-gpl --enable-nonfree --enable-libx264 --enable-libx265; do
     [[ "$runtime_configuration" != *"$forbidden"* ]] || fail "runtime contains forbidden flag: $forbidden"
+done
+for required in --enable-zlib --enable-bzlib; do
+    [[ "$runtime_configuration" == *"$required"* ]] || {
+        fail "runtime is missing configure flag: $required"
+    }
 done
 
 echo "verify-ffmpeg: passed ($architectures, $actual_binary_hash)"

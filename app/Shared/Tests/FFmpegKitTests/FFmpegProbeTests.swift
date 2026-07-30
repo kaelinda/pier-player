@@ -92,6 +92,26 @@ import Testing
     #expect(source.totalBytesRead <= 64)
 }
 
+@Test func defaultProbeBudgetHandlesLargeMatroskaHeaders() throws {
+    let limits = FFmpegProbeLimits.default
+    #expect(limits.maximumBytes == 32 * 1024 * 1024)
+    #expect(limits.maximumDuration == 15)
+
+    let compressed = try Data(
+        contentsOf: fixtureURL("video-h264-aac-large-attachment.mkv.zlib")
+    )
+    let data = try (compressed as NSData).decompressed(using: .zlib) as Data
+    let source = CountingByteSource(data: data)
+
+    let session = try FFmpegSession(source: source, limits: limits)
+    let metadata = try session.metadata()
+
+    #expect(metadata.containerName.contains("matroska"))
+    #expect(metadata.tracks.contains { $0.kind == .video && $0.codecName == "h264" })
+    #expect(metadata.tracks.contains { $0.kind == .audio && $0.codecName == "aac" })
+    #expect(source.totalBytesRead <= limits.maximumBytes)
+}
+
 @Test func elapsedProbeBudgetInterruptsSlowInput() throws {
     let data = try Data(contentsOf: fixtureURL("video-h264-aac.mkv"))
     let source = SlowByteSource(data: data, delay: 0.02)

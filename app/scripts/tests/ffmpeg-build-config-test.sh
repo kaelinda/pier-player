@@ -49,6 +49,8 @@ required_flags=(
     --enable-pic
     --enable-static
     --disable-shared
+    --enable-zlib
+    --enable-bzlib
     --enable-videotoolbox
     --enable-audiotoolbox
 )

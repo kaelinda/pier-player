@@ -47,6 +47,7 @@ assert_media() {
 }
 
 assert_media video-h264-aac.mkv h264 aac
+assert_media video-h264-aac-zlib.mkv h264 aac
 assert_media video-h264-aac.mp4 h264 aac
 assert_media video-longer-than-audio.mkv h264 aac
 assert_media video-vp9-opus.webm vp9 opus

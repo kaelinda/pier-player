@@ -13,6 +13,7 @@ import Testing
 
     let formats = [
         ExpectedFormat(fileName: "video-h264-aac.mkv", containerFragment: "matroska", videoCodec: "h264", audioCodec: "aac"),
+        ExpectedFormat(fileName: "video-h264-aac-zlib.mkv", containerFragment: "matroska", videoCodec: "h264", audioCodec: "aac"),
         ExpectedFormat(fileName: "video-h264-aac.mp4", containerFragment: "mov", videoCodec: "h264", audioCodec: "aac"),
         ExpectedFormat(fileName: "video-vp9-opus.webm", containerFragment: "matroska", videoCodec: "vp9", audioCodec: "opus"),
         ExpectedFormat(fileName: "video-mpeg4-mp3.avi", containerFragment: "avi", videoCodec: "mpeg4", audioCodec: "mp3"),
