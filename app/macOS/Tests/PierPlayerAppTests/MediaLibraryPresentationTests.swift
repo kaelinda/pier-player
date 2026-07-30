@@ -32,6 +32,18 @@ struct MediaLibraryPresentationTests {
         #expect(MediaLibraryPresentation.filtered(items, query: " \n\t ") == items)
     }
 
+    @Test func filterUsesInjectedLocaleForCaseInsensitiveMatching() {
+        let istanbul = item(name: "İstanbul.mkv", path: "/İstanbul.mkv")
+
+        #expect(
+            MediaLibraryPresentation.filtered(
+                [istanbul],
+                query: "istanbul",
+                locale: Locale(identifier: "tr_TR")
+            ) == [istanbul]
+        )
+    }
+
     @Test func displayTitleRemovesOnlyTheFinalExtension() {
         let item = item(name: "Episode.01.final.mkv", path: "/Episode.01.final.mkv")
 
@@ -67,6 +79,22 @@ struct MediaLibraryPresentationTests {
             MediaLibraryPresentation.recentlyAdded(
                 [laterPath, titleLater, earlierPath]
             ).map(\.media.path) == ["/a/same.MKV", "/z/Same.mp4", "/a/Zulu.mp4"]
+        )
+    }
+
+    @Test func recentlyAddedUsesLocalizedTitlesForEqualDates() {
+        let timestamp = date(100)
+        let items = [
+            item(name: "Zulu.mp4", path: "/Zulu.mp4", modifiedAt: timestamp),
+            item(name: "Éclair.mp4", path: "/Éclair.mp4", modifiedAt: timestamp),
+            item(name: "eagle.mp4", path: "/eagle.mp4", modifiedAt: timestamp),
+        ]
+
+        #expect(
+            MediaLibraryPresentation.recentlyAdded(
+                items,
+                locale: Locale(identifier: "en_US")
+            ).map(\.media.name) == ["eagle.mp4", "Éclair.mp4", "Zulu.mp4"]
         )
     }
 
@@ -109,6 +137,59 @@ struct MediaLibraryPresentationTests {
                 "\(secondSourceID.uuidString):/a/Alpha.mp4",
                 "\(firstSourceID.uuidString):/z/alpha.mov",
                 "\(firstSourceID.uuidString):/Zulu.mp4",
+            ]
+        )
+    }
+
+    @Test func allVideosUsesLocalizedAccentedTitleOrdering() {
+        let items = [
+            item(name: "Zulu.mp4", path: "/Zulu.mp4"),
+            item(name: "Éclair.mp4", path: "/Éclair.mp4"),
+            item(name: "eagle.mp4", path: "/eagle.mp4"),
+        ]
+
+        #expect(
+            MediaLibraryPresentation.allVideos(
+                items,
+                locale: Locale(identifier: "en_US")
+            ).map(\.media.name) == ["eagle.mp4", "Éclair.mp4", "Zulu.mp4"]
+        )
+    }
+
+    @Test func allVideosRemainsStrictAcrossEquivalentSortKeys() {
+        let firstSourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let secondSourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let locale = Locale(identifier: "en_US")
+        let duplicate = item(
+            name: "Duplicate.mp4",
+            path: "/Duplicate.mp4",
+            sourceID: firstSourceID
+        )
+        let items = [
+            item(name: "alpha.mp4", path: "/case.mp4", sourceID: firstSourceID),
+            item(name: "ALPHA.mp4", path: "/Case.mp4", sourceID: secondSourceID),
+            item(name: "Café.mp4", path: "/Café.mp4", sourceID: firstSourceID),
+            item(name: "Cafe\u{301}.mp4", path: "/Cafe\u{301}.mp4", sourceID: secondSourceID),
+            duplicate,
+            duplicate,
+        ]
+
+        let sorted = MediaLibraryPresentation.allVideos(items, locale: locale)
+        let sortedFromReverse = MediaLibraryPresentation.allVideos(
+            Array(items.reversed()),
+            locale: locale
+        )
+
+        #expect(sorted == MediaLibraryPresentation.allVideos(sorted, locale: locale))
+        #expect(sorted.map(\.id) == sortedFromReverse.map(\.id))
+        #expect(
+            sorted.map(\.id) == [
+                "\(secondSourceID.uuidString):/Case.mp4",
+                "\(firstSourceID.uuidString):/case.mp4",
+                "\(secondSourceID.uuidString):/Cafe\u{301}.mp4",
+                "\(firstSourceID.uuidString):/Café.mp4",
+                duplicate.id,
+                duplicate.id,
             ]
         )
     }

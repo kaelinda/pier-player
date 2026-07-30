@@ -11,7 +11,8 @@ enum MediaLibraryPresentation {
 
     static func filtered(
         _ items: [MediaLibraryItem],
-        query: String
+        query: String,
+        locale: Locale = .current
     ) -> [MediaLibraryItem] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty else {
@@ -19,8 +20,15 @@ enum MediaLibraryPresentation {
         }
 
         return items.filter { item in
-            containsCaseInsensitive(item.media.name, query: trimmedQuery)
-                || containsCaseInsensitive(item.sourceName, query: trimmedQuery)
+            containsCaseInsensitive(
+                item.media.name,
+                query: trimmedQuery,
+                locale: locale
+            ) || containsCaseInsensitive(
+                item.sourceName,
+                query: trimmedQuery,
+                locale: locale
+            )
         }
     }
 
@@ -31,19 +39,27 @@ enum MediaLibraryPresentation {
 
     static func recentlyAdded(
         _ items: [MediaLibraryItem],
-        limit: Int = 12
+        limit: Int = 12,
+        locale: Locale = .current
     ) -> [MediaLibraryItem] {
         guard limit > 0 else {
             return []
         }
 
         return Array(
-            items.sorted(by: isMoreRecent).prefix(limit)
+            items.sorted { lhs, rhs in
+                isMoreRecent(lhs, rhs, locale: locale)
+            }.prefix(limit)
         )
     }
 
-    static func allVideos(_ items: [MediaLibraryItem]) -> [MediaLibraryItem] {
-        items.sorted(by: isOrderedByTitle)
+    static func allVideos(
+        _ items: [MediaLibraryItem],
+        locale: Locale = .current
+    ) -> [MediaLibraryItem] {
+        items.sorted { lhs, rhs in
+            isOrderedByTitle(lhs, rhs, locale: locale)
+        }
     }
 
     static func posterStyle(for item: MediaLibraryItem) -> MediaPosterStyle {
@@ -58,17 +74,23 @@ enum MediaLibraryPresentation {
         )
     }
 
-    private static func containsCaseInsensitive(_ value: String, query: String) -> Bool {
+    private static func containsCaseInsensitive(
+        _ value: String,
+        query: String,
+        locale: Locale
+    ) -> Bool {
         value.range(
             of: query,
             options: [.caseInsensitive],
-            locale: Locale(identifier: "en_US_POSIX")
+            range: nil,
+            locale: locale
         ) != nil
     }
 
     private static func isMoreRecent(
         _ lhs: MediaLibraryItem,
-        _ rhs: MediaLibraryItem
+        _ rhs: MediaLibraryItem,
+        locale: Locale
     ) -> Bool {
         switch (lhs.media.modifiedAt, rhs.media.modifiedAt) {
         case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
@@ -78,44 +100,61 @@ enum MediaLibraryPresentation {
         case (nil, _?):
             return false
         default:
-            return isOrderedByTitle(lhs, rhs)
+            return isOrderedByTitle(lhs, rhs, locale: locale)
         }
     }
 
     private static func isOrderedByTitle(
         _ lhs: MediaLibraryItem,
-        _ rhs: MediaLibraryItem
+        _ rhs: MediaLibraryItem,
+        locale: Locale
     ) -> Bool {
         let titleOrder = caseInsensitiveCompare(
             displayTitle(for: lhs),
-            displayTitle(for: rhs)
+            displayTitle(for: rhs),
+            locale: locale
         )
         if titleOrder != .orderedSame {
             return titleOrder == .orderedAscending
         }
 
-        let pathOrder = caseInsensitiveCompare(lhs.media.path, rhs.media.path)
+        let pathOrder = caseInsensitiveCompare(
+            lhs.media.path,
+            rhs.media.path,
+            locale: locale
+        )
         if pathOrder != .orderedSame {
             return pathOrder == .orderedAscending
         }
-        if lhs.media.path != rhs.media.path {
-            return lhs.media.path < rhs.media.path
+
+        let rawPathOrder = rawCompare(lhs.media.path, rhs.media.path)
+        if rawPathOrder != .orderedSame {
+            return rawPathOrder == .orderedAscending
         }
 
-        return lhs.id < rhs.id
+        return rawCompare(lhs.id, rhs.id) == .orderedAscending
     }
 
     private static func caseInsensitiveCompare(
         _ lhs: String,
-        _ rhs: String
+        _ rhs: String,
+        locale: Locale
     ) -> ComparisonResult {
-        let locale = Locale(identifier: "en_US_POSIX")
-        let lhsKey = lhs.lowercased(with: locale)
-        let rhsKey = rhs.lowercased(with: locale)
-        if lhsKey == rhsKey {
+        lhs.compare(
+            rhs,
+            options: [.caseInsensitive],
+            range: nil,
+            locale: locale
+        )
+    }
+
+    private static func rawCompare(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        if lhs.utf8.elementsEqual(rhs.utf8) {
             return .orderedSame
         }
-        return lhsKey < rhsKey ? .orderedAscending : .orderedDescending
+        return lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
+            ? .orderedAscending
+            : .orderedDescending
     }
 
     private static func fnv1aHash(_ value: String) -> UInt64 {
