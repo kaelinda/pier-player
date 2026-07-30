@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
+        .library(name: "DiagnosticsKit", targets: ["DiagnosticsKit"]),
         .library(name: "MediaSourceKit", targets: ["MediaSourceKit"]),
         .library(name: "StreamIOKit", targets: ["StreamIOKit"]),
         .library(name: "PlaybackCore", targets: ["PlaybackCore"]),
@@ -17,6 +18,10 @@ let package = Package(
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
     ],
     targets: [
+        .target(
+            name: "DiagnosticsKit",
+            path: "Shared/Sources/DiagnosticsKit"
+        ),
         .target(
             name: "CLibSMB2",
             path: "Vendor/libsmb2",
@@ -85,6 +90,11 @@ let package = Package(
                 "StreamIOKit",
             ],
             path: "Tools/SMBProbe"
+        ),
+        .testTarget(
+            name: "DiagnosticsKitTests",
+            dependencies: ["DiagnosticsKit"],
+            path: "Shared/Tests/DiagnosticsKitTests"
         ),
         .testTarget(
             name: "MediaSourceKitTests",
