@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import Foundation
 import MediaSourceKit
 
@@ -6,41 +7,90 @@ public actor SMBMediaSource: MediaSource {
     public nonisolated let displayName: String
 
     private let client: any SMBClient
+    private let diagnosticRecorder: any DiagnosticRecording
+    private let diagnosticContext: DiagnosticContext
+    private let identityProvider: (any DiagnosticIdentityProviding)?
     private var isConnected = false
 
     public init(
         configuration: SMBConnectionConfiguration,
-        client: any SMBClient
+        client: any SMBClient,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) {
         id = configuration.sourceID
         displayName = configuration.displayName
         self.client = client
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext ?? makeDefaultDiagnosticContext()
+        self.identityProvider = identityProvider
     }
 
     public func connect() async throws {
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .sourceConnect,
+            level: .info,
+            payload: sourcePayload,
+            persistence: .essential
+        )
         do {
             try await client.connect()
             isConnected = true
+            operation.end(outcome: .success, payload: sourcePayload)
         } catch {
             isConnected = false
-            throw mapSMBError(error)
+            if error is CancellationError {
+                operation.end(outcome: .cancelled, payload: sourcePayload)
+                throw error
+            }
+            let mapped = mapSMBError(error)
+            operation.end(
+                outcome: .failure,
+                payload: sourcePayload,
+                error: diagnosticDescriptor(for: mapped)
+            )
+            throw mapped
         }
     }
 
     public func disconnect() async {
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .sourceDisconnect,
+            level: .info,
+            payload: sourcePayload,
+            persistence: .essential
+        )
         isConnected = false
         await client.disconnect()
+        operation.end(outcome: .success, payload: sourcePayload)
     }
 
     public func list(directory path: String) async throws -> [MediaSourceItem] {
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .directoryList,
+            payload: sourcePayload,
+            persistence: .essential
+        )
         guard isConnected else {
+            operation.end(
+                outcome: .failure,
+                payload: sourcePayload,
+                error: diagnosticDescriptor(for: MediaSourceError.notConnected)
+            )
             throw MediaSourceError.notConnected
         }
 
         do {
             let directory = try SMBPath(path)
             let entries = try await client.list(directory: directory)
-            return try entries
+            let items = try entries
                 .filter { !$0.name.hasPrefix(".") }
                 .map { entry in
                     let childPath = try directory.appending(entry.name)
@@ -53,13 +103,39 @@ public actor SMBMediaSource: MediaSource {
                     )
                 }
                 .sorted(by: Self.sortItems)
+            operation.end(outcome: .success, payload: sourcePayload)
+            return items
         } catch {
-            throw mapSMBError(error, path: path)
+            if error is CancellationError {
+                operation.end(outcome: .cancelled, payload: sourcePayload)
+                throw error
+            }
+            let mapped = mapSMBError(error, path: path)
+            operation.end(
+                outcome: .failure,
+                payload: sourcePayload,
+                error: diagnosticDescriptor(for: mapped)
+            )
+            throw mapped
         }
     }
 
     public func open(file path: String) async throws -> any MediaReadableFile {
+        let container = DiagnosticContainerKind(fileName: path)
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .fileOpen,
+            level: .info,
+            payload: DiagnosticPayload(sourceID: id, container: container),
+            persistence: .essential
+        )
         guard isConnected else {
+            operation.end(
+                outcome: .failure,
+                payload: DiagnosticPayload(sourceID: id, container: container),
+                error: diagnosticDescriptor(for: MediaSourceError.notConnected)
+            )
             throw MediaSourceError.notConnected
         }
 
@@ -72,10 +148,47 @@ public actor SMBMediaSource: MediaSource {
                 size: opened.size,
                 modifiedAt: opened.modifiedAt
             )
-            return SMBReadableFile(identity: identity, file: opened.file)
+            let fileID = identityProvider?.fileIdentity(
+                sourceID: id,
+                normalizedPath: normalizedPath.string,
+                size: opened.size,
+                modifiedAt: opened.modifiedAt
+            ).value
+            let payload = DiagnosticPayload(
+                sourceID: id,
+                fileID: fileID,
+                container: container,
+                fileSize: opened.size
+            )
+            operation.end(outcome: .success, payload: payload)
+            return SMBReadableFile(
+                identity: identity,
+                file: opened.file,
+                diagnosticRecorder: diagnosticRecorder,
+                diagnosticContext: operation.context,
+                fileID: fileID,
+                container: container
+            )
         } catch {
-            throw mapSMBError(error, path: path)
+            if error is CancellationError {
+                operation.end(
+                    outcome: .cancelled,
+                    payload: DiagnosticPayload(sourceID: id, container: container)
+                )
+                throw error
+            }
+            let mapped = mapSMBError(error, path: path)
+            operation.end(
+                outcome: .failure,
+                payload: DiagnosticPayload(sourceID: id, container: container),
+                error: diagnosticDescriptor(for: mapped)
+            )
+            throw mapped
         }
+    }
+
+    private var sourcePayload: DiagnosticPayload {
+        DiagnosticPayload(sourceID: id)
     }
 
     private static func sortItems(_ lhs: MediaSourceItem, _ rhs: MediaSourceItem) -> Bool {
@@ -93,22 +206,81 @@ public actor SMBMediaSource: MediaSource {
 private actor SMBReadableFile: MediaReadableFile {
     nonisolated let identity: MediaFileIdentity
     private let file: any SMBClientFile
+    private let diagnosticRecorder: any DiagnosticRecording
+    private let diagnosticContext: DiagnosticContext
+    private let fileID: String?
+    private let container: DiagnosticContainerKind
+    private var isClosed = false
 
-    init(identity: MediaFileIdentity, file: any SMBClientFile) {
+    init(
+        identity: MediaFileIdentity,
+        file: any SMBClientFile,
+        diagnosticRecorder: any DiagnosticRecording,
+        diagnosticContext: DiagnosticContext,
+        fileID: String?,
+        container: DiagnosticContainerKind
+    ) {
         self.identity = identity
         self.file = file
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext
+        self.fileID = fileID
+        self.container = container
     }
 
     func read(at offset: Int64, length: Int) async throws -> Data {
         do {
             return try await file.read(at: offset, length: length)
         } catch {
+            if error is CancellationError { throw error }
             throw mapSMBError(error, path: identity.path)
         }
     }
 
     func close() async {
+        guard !isClosed else { return }
+        isClosed = true
+        let payload = DiagnosticPayload(
+            sourceID: identity.sourceID,
+            fileID: fileID,
+            container: container,
+            fileSize: identity.size
+        )
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .fileClose,
+            level: .info,
+            payload: payload,
+            persistence: .essential
+        )
         await file.close()
+        operation.end(outcome: .success, payload: payload)
+    }
+}
+
+private func makeDefaultDiagnosticContext() -> DiagnosticContext {
+    DiagnosticContext(appRunID: UUID(), activityID: UUID(), operationID: UUID())
+}
+
+private func diagnosticDescriptor(for error: MediaSourceError) -> DiagnosticErrorDescriptor {
+    switch error {
+    case .notConnected:
+        DiagnosticErrorDescriptor(code: .sourceNotConnected, isRetryable: true)
+    case .authenticationFailed:
+        DiagnosticErrorDescriptor(code: .sourceAuthenticationFailed)
+    case .unreachable:
+        DiagnosticErrorDescriptor(code: .sourceUnreachable, isRetryable: true)
+    case .notFound:
+        DiagnosticErrorDescriptor(code: .sourceNotFound)
+    case .invalidRead:
+        DiagnosticErrorDescriptor(code: .sourceInvalidRead)
+    case .readFailed:
+        DiagnosticErrorDescriptor(code: .sourceReadFailed, isRetryable: true)
+    case .remoteFileChanged:
+        DiagnosticErrorDescriptor(code: .sourceRemoteFileChanged)
+    case .unsupported:
+        DiagnosticErrorDescriptor(code: .sourceUnsupported)
     }
 }
 

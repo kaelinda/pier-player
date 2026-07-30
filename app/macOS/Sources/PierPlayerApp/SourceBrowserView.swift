@@ -41,7 +41,14 @@ struct SourceBrowserView: View {
         }
         .sheet(item: $selectedFile) { item in
             if let connectedSource = model.source(id: sourceID) {
-                VideoPlayerSheet(item: item, source: connectedSource.source)
+                let diagnostics = model.makePlaybackDiagnosticDependencies()
+                VideoPlayerSheet(
+                    item: item,
+                    source: connectedSource.source,
+                    diagnosticRecorder: diagnostics.recorder,
+                    diagnosticContext: diagnostics.context,
+                    identityProvider: diagnostics.identityProvider
+                )
             }
         }
     }

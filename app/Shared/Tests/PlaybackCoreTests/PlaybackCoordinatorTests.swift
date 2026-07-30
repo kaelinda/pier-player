@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import FFmpegKit
 import Foundation
 import MediaSourceKit
@@ -38,6 +39,52 @@ import Testing
     await coordinator.stop()
     #expect(await coordinator.snapshot.state == .idle)
     #expect(file.closeCount == 1)
+}
+
+@MainActor
+@Test func coordinatorCorrelatesPlaybackAndResourceDiagnostics() async throws {
+    let file = try PlaybackTestFile(fixture: "video-h264-aac.mkv")
+    let recorder = CoordinatorRecordingDiagnosticRecorder()
+    let context = DiagnosticContext(
+        appRunID: UUID(),
+        activityID: UUID(),
+        operationID: UUID()
+    )
+    let identityProvider = HMACDiagnosticIdentityProvider(
+        keyData: Data(repeating: 7, count: 32)
+    )
+    let coordinator = PlaybackCoordinator(
+        renderer: SampleBufferRenderer(maximumPendingDuration: 3),
+        configuration: .test,
+        diagnosticRecorder: recorder,
+        diagnosticContext: context,
+        identityProvider: identityProvider
+    )
+
+    try await coordinator.start(file: file)
+    try await waitForCoordinator(coordinator) { $0.state == .playing }
+    await coordinator.stop()
+
+    let events = recorder.snapshot
+    #expect(events.contains { $0.name == .playbackPrepare })
+    #expect(events.contains { $0.name == .playbackPlay })
+    #expect(events.contains { $0.name == .resourceRequest })
+    #expect(events.contains { $0.name == .resourceRead })
+    #expect(events.allSatisfy { $0.context.activityID == context.activityID })
+    let expectedFileID = identityProvider.fileIdentity(
+        sourceID: file.identity.sourceID,
+        normalizedPath: file.identity.path,
+        size: file.identity.size,
+        modifiedAt: file.identity.modifiedAt
+    ).value
+    #expect(events.contains {
+        $0.name == .resourceRead && $0.payload.fileID == expectedFileID
+    })
+    let encoded = try events.map(DiagnosticEventEncoder.encode)
+        .map { String(decoding: $0, as: UTF8.self) }
+        .joined()
+        .lowercased()
+    #expect(!encoded.contains("video-h264-aac.mkv"))
 }
 
 @MainActor
@@ -667,4 +714,17 @@ private func playbackFixtureData(_ fileName: String) throws -> Data {
         .appendingPathComponent("Fixtures")
         .appendingPathComponent(fileName)
     return try Data(contentsOf: url)
+}
+
+private final class CoordinatorRecordingDiagnosticRecorder: DiagnosticRecording, @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [DiagnosticEvent] = []
+
+    var snapshot: [DiagnosticEvent] {
+        lock.withLock { events }
+    }
+
+    func record(_ event: DiagnosticEvent) {
+        lock.withLock { events.append(event) }
+    }
 }

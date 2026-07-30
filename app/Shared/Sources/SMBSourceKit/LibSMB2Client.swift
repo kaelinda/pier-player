@@ -1,4 +1,5 @@
 import Darwin
+import DiagnosticsKit
 import Foundation
 import SMB2
 
@@ -6,15 +7,24 @@ public actor LibSMB2Client: SMBClient {
     private let configuration: SMBConnectionConfiguration
     private let credential: SMBCredential
     private let nativeFactory: any SMBNativeConnectionFactory
+    private let diagnosticRecorder: any DiagnosticRecording
+    private let diagnosticContext: DiagnosticContext
+    private let identityProvider: (any DiagnosticIdentityProviding)?
     private var connection: (any SMBNativeConnection)?
 
     public init(
         configuration: SMBConnectionConfiguration,
-        credential: SMBCredential
+        credential: SMBCredential,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) {
         self.configuration = configuration
         self.credential = credential
         nativeFactory = SystemLibSMB2ConnectionFactory()
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext ?? makeLibSMB2DiagnosticContext()
+        self.identityProvider = identityProvider
     }
 
     public init(
@@ -24,7 +34,10 @@ public actor LibSMB2Client: SMBClient {
         share: String,
         domain: String? = nil,
         requiresEncryption: Bool = false,
-        credential: SMBCredential
+        credential: SMBCredential,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) throws {
         configuration = try SMBConnectionConfiguration(
             sourceID: sourceID,
@@ -36,16 +49,25 @@ public actor LibSMB2Client: SMBClient {
         )
         self.credential = credential
         nativeFactory = SystemLibSMB2ConnectionFactory()
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext ?? makeLibSMB2DiagnosticContext()
+        self.identityProvider = identityProvider
     }
 
     init(
         configuration: SMBConnectionConfiguration,
         credential: SMBCredential,
-        nativeFactory: any SMBNativeConnectionFactory
+        nativeFactory: any SMBNativeConnectionFactory,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) {
         self.configuration = configuration
         self.credential = credential
         self.nativeFactory = nativeFactory
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext ?? makeLibSMB2DiagnosticContext()
+        self.identityProvider = identityProvider
     }
 
     init(
@@ -56,7 +78,10 @@ public actor LibSMB2Client: SMBClient {
         domain: String? = nil,
         requiresEncryption: Bool = false,
         credential: SMBCredential,
-        nativeFactory: any SMBNativeConnectionFactory
+        nativeFactory: any SMBNativeConnectionFactory,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) throws {
         configuration = try SMBConnectionConfiguration(
             sourceID: sourceID,
@@ -68,14 +93,38 @@ public actor LibSMB2Client: SMBClient {
         )
         self.credential = credential
         self.nativeFactory = nativeFactory
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext ?? makeLibSMB2DiagnosticContext()
+        self.identityProvider = identityProvider
     }
 
     public func connect() async throws {
         guard connection == nil else { return }
-        connection = try await nativeFactory.connect(
-            configuration: configuration,
-            credential: credential
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .smbConnect,
+            level: .info,
+            payload: DiagnosticPayload(sourceID: configuration.sourceID),
+            persistence: .essential
         )
+        do {
+            connection = try await nativeFactory.connect(
+                configuration: configuration,
+                credential: credential
+            )
+            operation.end(
+                outcome: .success,
+                payload: DiagnosticPayload(sourceID: configuration.sourceID)
+            )
+        } catch {
+            recordLibSMB2Failure(
+                error,
+                operation: operation,
+                sourceID: configuration.sourceID
+            )
+            throw error
+        }
     }
 
     public func disconnect() async {
@@ -85,37 +134,189 @@ public actor LibSMB2Client: SMBClient {
     }
 
     public func list(directory path: SMBPath) async throws -> [SMBDirectoryEntry] {
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .smbList,
+            payload: DiagnosticPayload(sourceID: configuration.sourceID),
+            persistence: .essential
+        )
         guard let connection else {
+            operation.end(
+                outcome: .failure,
+                payload: DiagnosticPayload(sourceID: configuration.sourceID),
+                error: diagnosticDescriptor(for: SMBClientError.notConnected)
+            )
             throw SMBClientError.notConnected
         }
-        return try await connection.list(directory: path)
+        do {
+            let entries = try await connection.list(directory: path)
+            operation.end(
+                outcome: .success,
+                payload: DiagnosticPayload(sourceID: configuration.sourceID)
+            )
+            return entries
+        } catch {
+            recordLibSMB2Failure(
+                error,
+                operation: operation,
+                sourceID: configuration.sourceID
+            )
+            throw error
+        }
     }
 
     public func open(file path: SMBPath) async throws -> SMBOpenedFile {
+        let container = DiagnosticContainerKind(fileName: path.string)
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .smbOpen,
+            level: .info,
+            payload: DiagnosticPayload(
+                sourceID: configuration.sourceID,
+                container: container
+            ),
+            persistence: .essential
+        )
         guard connection != nil else {
+            operation.end(
+                outcome: .failure,
+                payload: DiagnosticPayload(
+                    sourceID: configuration.sourceID,
+                    container: container
+                ),
+                error: diagnosticDescriptor(for: SMBClientError.notConnected)
+            )
             throw SMBClientError.notConnected
         }
 
-        let fileConnection = try await nativeFactory.connect(
-            configuration: configuration,
-            credential: credential
-        )
         do {
-            let stat = try await fileConnection.stat(path: path)
-            guard stat.kind == .file else {
-                throw SMBClientError.unsupported
-            }
-            let handle = try await fileConnection.open(file: path)
-            let file = LibSMB2File(
-                size: stat.size,
-                handle: handle,
-                connection: fileConnection
+            let fileConnection = try await nativeFactory.connect(
+                configuration: configuration,
+                credential: credential
             )
-            return SMBOpenedFile(file: file, size: stat.size, modifiedAt: stat.modifiedAt)
+            do {
+                let statOperation = DiagnosticOperation(
+                    recorder: diagnosticRecorder,
+                    parentContext: operation.context,
+                    name: .smbStat,
+                    payload: DiagnosticPayload(
+                        sourceID: configuration.sourceID,
+                        container: container
+                    ),
+                    persistence: .essential
+                )
+                let stat: SMBNativeStat
+                do {
+                    stat = try await fileConnection.stat(path: path)
+                    statOperation.end(
+                        outcome: .success,
+                        payload: DiagnosticPayload(
+                            sourceID: configuration.sourceID,
+                            container: container,
+                            fileSize: stat.size
+                        )
+                    )
+                } catch {
+                    recordLibSMB2Failure(
+                        error,
+                        operation: statOperation,
+                        sourceID: configuration.sourceID,
+                        container: container
+                    )
+                    throw error
+                }
+                guard stat.kind == .file else {
+                    throw SMBClientError.unsupported
+                }
+                let handle = try await fileConnection.open(file: path)
+                let fileID = identityProvider?.fileIdentity(
+                    sourceID: configuration.sourceID,
+                    normalizedPath: path.string,
+                    size: stat.size,
+                    modifiedAt: stat.modifiedAt
+                ).value
+                let file = LibSMB2File(
+                    size: stat.size,
+                    handle: handle,
+                    connection: fileConnection,
+                    diagnosticRecorder: diagnosticRecorder,
+                    diagnosticContext: operation.context,
+                    sourceID: configuration.sourceID,
+                    fileID: fileID
+                )
+                operation.end(
+                    outcome: .success,
+                    payload: DiagnosticPayload(
+                        sourceID: configuration.sourceID,
+                        fileID: fileID,
+                        container: container,
+                        fileSize: stat.size
+                    )
+                )
+                return SMBOpenedFile(file: file, size: stat.size, modifiedAt: stat.modifiedAt)
+            } catch {
+                await fileConnection.disconnect()
+                throw error
+            }
         } catch {
-            await fileConnection.disconnect()
+            recordLibSMB2Failure(
+                error,
+                operation: operation,
+                sourceID: configuration.sourceID,
+                container: container
+            )
             throw error
         }
+    }
+}
+
+private func makeLibSMB2DiagnosticContext() -> DiagnosticContext {
+    DiagnosticContext(appRunID: UUID(), activityID: UUID(), operationID: UUID())
+}
+
+private func recordLibSMB2Failure(
+    _ error: Error,
+    operation: DiagnosticOperation,
+    sourceID: UUID,
+    container: DiagnosticContainerKind? = nil
+) {
+    if error is CancellationError {
+        operation.end(
+            outcome: .cancelled,
+            payload: DiagnosticPayload(sourceID: sourceID, container: container)
+        )
+    } else {
+        operation.end(
+            outcome: .failure,
+            payload: DiagnosticPayload(sourceID: sourceID, container: container),
+            error: diagnosticDescriptor(for: error)
+        )
+    }
+}
+
+private func diagnosticDescriptor(for error: Error) -> DiagnosticErrorDescriptor {
+    guard let error = error as? SMBClientError else {
+        return DiagnosticErrorDescriptor(code: .sourceUnreachable, isRetryable: true)
+    }
+    return switch error {
+    case .notConnected:
+        DiagnosticErrorDescriptor(code: .sourceNotConnected, isRetryable: true)
+    case .authenticationFailed:
+        DiagnosticErrorDescriptor(code: .sourceAuthenticationFailed)
+    case .unreachable:
+        DiagnosticErrorDescriptor(code: .sourceUnreachable, isRetryable: true)
+    case .notFound:
+        DiagnosticErrorDescriptor(code: .sourceNotFound)
+    case .invalidRead:
+        DiagnosticErrorDescriptor(code: .sourceInvalidRead)
+    case .readFailed:
+        DiagnosticErrorDescriptor(code: .sourceReadFailed, isRetryable: true)
+    case .remoteFileChanged:
+        DiagnosticErrorDescriptor(code: .sourceRemoteFileChanged)
+    case .unsupported:
+        DiagnosticErrorDescriptor(code: .sourceUnsupported)
     }
 }
 

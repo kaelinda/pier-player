@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
+        .library(name: "DiagnosticsKit", targets: ["DiagnosticsKit"]),
         .library(name: "MediaSourceKit", targets: ["MediaSourceKit"]),
         .library(name: "StreamIOKit", targets: ["StreamIOKit"]),
         .library(name: "PlaybackCore", targets: ["PlaybackCore"]),
@@ -18,12 +19,20 @@ let package = Package(
         .library(name: "SubtitleKit", targets: ["SubtitleKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
+        .executable(name: "DiagnosticsReport", targets: ["DiagnosticsReport"]),
         .executable(name: "PlaybackProbe", targets: ["PlaybackProbe"]),
     ],
     targets: [
         .binaryTarget(
             name: "PierFFmpeg",
             path: "Vendor/FFmpeg/PierFFmpeg.xcframework"
+        ),
+        .target(
+            name: "DiagnosticsKit",
+            path: "Shared/Sources/DiagnosticsKit",
+            linkerSettings: [
+                .linkedFramework("Security"),
+            ]
         ),
         .target(
             name: "CLibSMB2",
@@ -55,7 +64,7 @@ let package = Package(
         ),
         .target(
             name: "SMBSourceKit",
-            dependencies: ["MediaSourceKit", "CLibSMB2"],
+            dependencies: ["DiagnosticsKit", "MediaSourceKit", "CLibSMB2"],
             path: "Shared/Sources/SMBSourceKit",
             linkerSettings: [
                 .linkedFramework("Security"),
@@ -63,12 +72,13 @@ let package = Package(
         ),
         .target(
             name: "StreamIOKit",
-            dependencies: ["MediaSourceKit"],
+            dependencies: ["DiagnosticsKit", "MediaSourceKit"],
             path: "Shared/Sources/StreamIOKit"
         ),
         .target(
             name: "PlaybackCore",
             dependencies: [
+                "DiagnosticsKit",
                 "MediaSourceKit",
                 "StreamIOKit",
                 "FFmpegKit",
@@ -79,6 +89,7 @@ let package = Package(
         ),
         .target(
             name: "PlaybackTelemetry",
+            dependencies: ["DiagnosticsKit"],
             path: "Shared/Sources/PlaybackTelemetry"
         ),
         .target(
@@ -105,6 +116,7 @@ let package = Package(
             name: "PierPlayerApp",
             dependencies: [
                 "MediaSourceKit",
+                "DiagnosticsKit",
                 "StreamIOKit",
                 "PlaybackCore",
                 "PlaybackTelemetry",
@@ -125,6 +137,16 @@ let package = Package(
             path: "Tools/SMBProbe"
         ),
         .executableTarget(
+            name: "DiagnosticsReport",
+            dependencies: ["DiagnosticsKit"],
+            path: "Tools/DiagnosticsReport"
+        ),
+        .testTarget(
+            name: "DiagnosticsKitTests",
+            dependencies: ["DiagnosticsKit"],
+            path: "Shared/Tests/DiagnosticsKitTests"
+        ),
+        .executableTarget(
             name: "PlaybackProbe",
             dependencies: [
                 "FFmpegKit",
@@ -139,22 +161,28 @@ let package = Package(
         ),
         .testTarget(
             name: "StreamIOKitTests",
-            dependencies: ["StreamIOKit", "MediaSourceKit"],
+            dependencies: ["DiagnosticsKit", "StreamIOKit", "MediaSourceKit"],
             path: "Shared/Tests/StreamIOKitTests"
         ),
         .testTarget(
             name: "SMBSourceKitTests",
-            dependencies: ["SMBSourceKit"],
+            dependencies: ["DiagnosticsKit", "SMBSourceKit"],
             path: "Shared/Tests/SMBSourceKitTests"
         ),
         .testTarget(
             name: "PlaybackCoreTests",
-            dependencies: ["PlaybackCore", "MediaSourceKit", "RenderKit", "SubtitleKit"],
+            dependencies: [
+                "DiagnosticsKit",
+                "PlaybackCore",
+                "MediaSourceKit",
+                "RenderKit",
+                "SubtitleKit",
+            ],
             path: "Shared/Tests/PlaybackCoreTests"
         ),
         .testTarget(
             name: "PlaybackTelemetryTests",
-            dependencies: ["PlaybackTelemetry"],
+            dependencies: ["DiagnosticsKit", "PlaybackTelemetry"],
             path: "Shared/Tests/PlaybackTelemetryTests"
         ),
         .testTarget(
@@ -175,11 +203,13 @@ let package = Package(
         .testTarget(
             name: "PierPlayerAppTests",
             dependencies: [
+                "DiagnosticsKit",
                 "PierPlayerApp",
                 "FFmpegKit",
                 "MediaSourceKit",
                 "PlaybackCore",
                 "RenderKit",
+                "SMBSourceKit",
             ],
             path: "macOS/Tests/PierPlayerAppTests"
         ),

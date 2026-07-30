@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import MediaSourceKit
 import PlaybackCore
 import SwiftUI
@@ -8,10 +9,22 @@ struct VideoPlayerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @MainActor
-    init(item: MediaSourceItem, source: any MediaSource) {
+    init(
+        item: MediaSourceItem,
+        source: any MediaSource,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
+    ) {
         self.item = item
         _playerModel = StateObject(
-            wrappedValue: VideoPlayerModel(item: item, source: source)
+            wrappedValue: VideoPlayerModel(
+                item: item,
+                source: source,
+                diagnosticRecorder: diagnosticRecorder,
+                diagnosticContext: diagnosticContext,
+                identityProvider: identityProvider
+            )
         )
     }
 

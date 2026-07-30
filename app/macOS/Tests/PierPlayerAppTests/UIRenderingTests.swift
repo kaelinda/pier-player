@@ -1,4 +1,5 @@
 import AppKit
+import DiagnosticsKit
 import MediaSourceKit
 import PlaybackCore
 import RenderKit
@@ -300,6 +301,42 @@ func playerRendersLongMetadataAtSupportedSizes(size: CGSize) async throws {
 }
 
 @MainActor
+@Test(arguments: DiagnosticSettingsRenderingFixture.all)
+private func diagnosticsSettingsRendersAllOperationalStates(
+    fixture: DiagnosticSettingsRenderingFixture
+) throws {
+    let size = CGSize(width: 520, height: 560)
+    let image = try renderInWindow(
+        DiagnosticsSettingsContentView(
+            snapshot: fixture.snapshot,
+            now: fixture.now,
+            selectedRunIDs: .constant(Set(fixture.snapshot.recentRuns.map(\.runID))),
+            isExporting: false,
+            setDetailedEnabled: { _ in },
+            export: {},
+            reveal: {},
+            clear: {}
+        )
+        .preferredColorScheme(.dark)
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 8)
+    #expect(darkPixelFraction(in: image) > 0.55)
+    #expect(DiagnosticsSettingsCopy.detailedDiagnostics == "Detailed Diagnostics")
+    #expect(DiagnosticsSettingsCopy.storageUsage == "Storage Usage")
+    #expect(DiagnosticsSettingsCopy.recentSessions == "Recent Sessions")
+    #expect(DiagnosticsSettingsCopy.export == "Export")
+    #expect(DiagnosticsSettingsCopy.reveal == "Reveal in Finder")
+    #expect(DiagnosticsSettingsCopy.clear == "Clear History")
+    try writeSnapshotIfRequested(image, name: "diagnostics-settings-\(fixture.name)")
+}
+
+@MainActor
 private func render<Content: View>(_ content: Content, at size: CGSize) throws -> NSImage {
     let hostingView = NSHostingView(rootView: content)
     hostingView.frame = NSRect(origin: .zero, size: size)
@@ -455,6 +492,75 @@ private func mediaLibraryFixture() -> (
         ),
         sources
     )
+}
+
+private struct DiagnosticSettingsRenderingFixture: Sendable, CustomTestStringConvertible {
+    let name: String
+    let now: Date
+    let snapshot: DiagnosticStatusSnapshot
+
+    var testDescription: String { name }
+
+    static let all: [DiagnosticSettingsRenderingFixture] = {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let run = DiagnosticRunSummary(
+            runID: UUID(uuidString: "30000000-0000-0000-0000-000000000001")!,
+            startedAt: now.addingTimeInterval(-600),
+            endedAt: now.addingTimeInterval(-300),
+            policy: .standard,
+            byteCount: 512 * 1_024
+        )
+        return [
+            DiagnosticSettingsRenderingFixture(
+                name: "standard-empty",
+                now: now,
+                snapshot: DiagnosticStatusSnapshot(
+                    policy: .standard,
+                    detailedUntil: nil,
+                    isCapturingIncident: false,
+                    storageBytes: 0,
+                    recentRuns: [],
+                    warning: nil
+                )
+            ),
+            DiagnosticSettingsRenderingFixture(
+                name: "detailed",
+                now: now,
+                snapshot: DiagnosticStatusSnapshot(
+                    policy: .detailed,
+                    detailedUntil: now.addingTimeInterval(24 * 60),
+                    isCapturingIncident: false,
+                    storageBytes: 18 * 1_024 * 1_024,
+                    recentRuns: [run],
+                    warning: nil
+                )
+            ),
+            DiagnosticSettingsRenderingFixture(
+                name: "incident",
+                now: now,
+                snapshot: DiagnosticStatusSnapshot(
+                    policy: .incident,
+                    detailedUntil: nil,
+                    isCapturingIncident: true,
+                    storageBytes: 32 * 1_024 * 1_024,
+                    recentRuns: [run],
+                    warning: nil
+                )
+            ),
+            DiagnosticSettingsRenderingFixture(
+                name: "storage-warning",
+                now: now,
+                snapshot: DiagnosticStatusSnapshot(
+                    policy: .standard,
+                    detailedUntil: nil,
+                    isCapturingIncident: false,
+                    storageBytes: 100 * 1_024 * 1_024,
+                    recentRuns: [run],
+                    warning: .storageLimitReached
+                )
+            ),
+        ]
+    }()
 }
 
 private actor SuspendedRenderingMediaSource: MediaSource {

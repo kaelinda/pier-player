@@ -1,3 +1,4 @@
+import DiagnosticsKit
 import MediaSourceKit
 import PlaybackCore
 import SMBSourceKit
@@ -5,6 +6,12 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    struct PlaybackDiagnosticDependencies {
+        let recorder: any DiagnosticRecording
+        let context: DiagnosticContext
+        let identityProvider: (any DiagnosticIdentityProviding)?
+    }
+
     struct ConnectedSource: Identifiable {
         let id: UUID
         let displayName: String
@@ -19,51 +26,84 @@ final class AppModel: ObservableObject {
     let playbackSession: PlaybackSession
     private let credentialStore: any SMBCredentialStore
     private let sourceStore: SMBSourceStore
+    private let diagnosticRecorder: any DiagnosticRecording
+    private let diagnosticContext: DiagnosticContext
+    private let identityProvider: (any DiagnosticIdentityProviding)?
 
     init(
         playbackSession: PlaybackSession = PlaybackSession(),
-        credentialStore: any SMBCredentialStore = KeychainCredentialStore()
+        credentialStore: any SMBCredentialStore = KeychainCredentialStore(),
+        sourceStore: SMBSourceStore? = nil,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) {
         self.playbackSession = playbackSession
         self.credentialStore = credentialStore
-        self.sourceStore = (try? SMBSourceStore()) ?? SMBSourceStore(fallback: ())
+        self.sourceStore = sourceStore
+            ?? (try? SMBSourceStore())
+            ?? SMBSourceStore(fallback: ())
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext ?? DiagnosticContext(
+            appRunID: UUID(),
+            activityID: UUID(),
+            operationID: UUID()
+        )
+        self.identityProvider = identityProvider
     }
 
     func restore() async {
         isRestoring = true
         defer { isRestoring = false }
-
-        let logPath = FileManager.default.temporaryDirectory.appendingPathComponent("pier_restore.log")
-        let logPrefix = "[restore]"
-
-        func log(_ msg: String) {
-            let line = "\(logPrefix) \(msg)\n"
-            try? line.write(to: logPath, atomically: true, encoding: .utf8)
-        }
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .sourceRestore,
+            level: .info,
+            persistence: .essential
+        )
 
         let storedSources: [SMBStorageSource]
         do {
             storedSources = try await sourceStore.load()
-            log("loaded \(storedSources.count) sources from store")
         } catch {
-            log("FAILED to load sources: \(error)")
+            operation.end(
+                outcome: .failure,
+                error: DiagnosticErrorDescriptor(code: .diagnosticsStorageFailed)
+            )
             return
         }
 
         for stored in storedSources {
+            let restoreOperation = DiagnosticOperation(
+                recorder: diagnosticRecorder,
+                parentContext: operation.context,
+                name: .sourceRestore,
+                payload: DiagnosticPayload(sourceID: stored.id),
+                persistence: .essential
+            )
             do {
-                try await restoreSource(stored, log: log)
+                try await restoreSource(stored, context: restoreOperation.context)
+                restoreOperation.end(
+                    outcome: .success,
+                    payload: DiagnosticPayload(sourceID: stored.id)
+                )
             } catch {
-                log("OUTER FAILURE for \(stored.displayName): \(type(of: error)) - \(error)")
+                finishAppSourceOperation(
+                    restoreOperation,
+                    error: error,
+                    sourceID: stored.id
+                )
             }
         }
+        operation.end(outcome: .success)
     }
 
-    private func restoreSource(_ stored: SMBStorageSource, log: (String) -> Void) async throws {
-        log("attempting to restore: \(stored.displayName) id=\(stored.id)")
-        log("creating credential from stored username=\(stored.username)")
+    private func restoreSource(
+        _ stored: SMBStorageSource,
+        context: DiagnosticContext
+    ) async throws {
         let credential = try SMBCredential(username: stored.username, password: stored.password)
-        log("credential created")
         let configuration = try SMBConnectionConfiguration(
             sourceID: stored.id,
             displayName: stored.displayName,
@@ -72,10 +112,20 @@ final class AppModel: ObservableObject {
             domain: stored.domain,
             requiresEncryption: stored.requiresEncryption
         )
-        log("configuration created")
-        let client = LibSMB2Client(configuration: configuration, credential: credential)
-        let source = SMBMediaSource(configuration: configuration, client: client)
-        log("connecting to SMB server...")
+        let client = LibSMB2Client(
+            configuration: configuration,
+            credential: credential,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: context,
+            identityProvider: identityProvider
+        )
+        let source = SMBMediaSource(
+            configuration: configuration,
+            client: client,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: context,
+            identityProvider: identityProvider
+        )
         try await source.connect()
         sources.append(ConnectedSource(
             id: configuration.sourceID,
@@ -83,7 +133,6 @@ final class AppModel: ObservableObject {
             source: source,
             configuration: configuration
         ))
-        log("connected to \(configuration.displayName)")
     }
 
     var phaseLabel: String {
@@ -117,8 +166,20 @@ final class AppModel: ObservableObject {
             requiresEncryption: requiresEncryption
         )
         let credential = try SMBCredential(username: username, password: password)
-        let client = LibSMB2Client(configuration: configuration, credential: credential)
-        let source = SMBMediaSource(configuration: configuration, client: client)
+        let client = LibSMB2Client(
+            configuration: configuration,
+            credential: credential,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: diagnosticContext,
+            identityProvider: identityProvider
+        )
+        let source = SMBMediaSource(
+            configuration: configuration,
+            client: client,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: diagnosticContext,
+            identityProvider: identityProvider
+        )
 
         do {
             try await source.connect()
@@ -151,6 +212,19 @@ final class AppModel: ObservableObject {
 
     func source(id: UUID?) -> ConnectedSource? {
         sources.first { $0.id == id }
+    }
+
+    func makePlaybackDiagnosticDependencies() -> PlaybackDiagnosticDependencies {
+        PlaybackDiagnosticDependencies(
+            recorder: diagnosticRecorder,
+            context: DiagnosticContext(
+                appRunID: diagnosticContext.appRunID,
+                activityID: UUID(),
+                operationID: UUID(),
+                parentOperationID: diagnosticContext.operationID
+            ),
+            identityProvider: identityProvider
+        )
     }
 
     var mediaLibrarySources: [MediaLibrarySource] {
@@ -217,4 +291,44 @@ final class AppModel: ObservableObject {
             "The SMB source could not be connected."
         }
     }
+}
+
+private func finishAppSourceOperation(
+    _ operation: DiagnosticOperation,
+    error: Error,
+    sourceID: UUID
+) {
+    if error is CancellationError {
+        operation.end(
+            outcome: .cancelled,
+            payload: DiagnosticPayload(sourceID: sourceID)
+        )
+        return
+    }
+    let code: DiagnosticErrorCode
+    switch error {
+    case MediaSourceError.notConnected:
+        code = .sourceNotConnected
+    case MediaSourceError.authenticationFailed:
+        code = .sourceAuthenticationFailed
+    case MediaSourceError.unreachable:
+        code = .sourceUnreachable
+    case MediaSourceError.notFound:
+        code = .sourceNotFound
+    case MediaSourceError.invalidRead:
+        code = .sourceInvalidRead
+    case MediaSourceError.readFailed:
+        code = .sourceReadFailed
+    case MediaSourceError.remoteFileChanged:
+        code = .sourceRemoteFileChanged
+    case MediaSourceError.unsupported:
+        code = .sourceUnsupported
+    default:
+        code = .sourceUnreachable
+    }
+    operation.end(
+        outcome: .failure,
+        payload: DiagnosticPayload(sourceID: sourceID),
+        error: DiagnosticErrorDescriptor(code: code)
+    )
 }

@@ -1,4 +1,5 @@
 import CoreVideo
+import DiagnosticsKit
 import FFmpegKit
 import Foundation
 import MediaSourceKit
@@ -65,7 +66,10 @@ public actor PlaybackCoordinator {
     private let snapshotContinuation: AsyncStream<PlaybackCoordinatorSnapshot>.Continuation
     private let renderer: SampleBufferRenderer
     private let configuration: PlaybackCoordinatorConfiguration
-    private let stateMachine = PlaybackSession()
+    private let diagnosticRecorder: any DiagnosticRecording
+    private let diagnosticContext: DiagnosticContext
+    private let identityProvider: (any DiagnosticIdentityProviding)?
+    private let stateMachine: PlaybackSession
 
     private var resources: Resources?
     private var reopenFile: MediaFileReopener?
@@ -97,8 +101,16 @@ public actor PlaybackCoordinator {
     @MainActor
     public init(
         renderer: SampleBufferRenderer,
-        configuration: PlaybackCoordinatorConfiguration = .default
+        configuration: PlaybackCoordinatorConfiguration = .default,
+        diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
+        diagnosticContext: DiagnosticContext? = nil,
+        identityProvider: (any DiagnosticIdentityProviding)? = nil
     ) {
+        let diagnosticContext = diagnosticContext ?? DiagnosticContext(
+            appRunID: UUID(),
+            activityID: UUID(),
+            operationID: UUID()
+        )
         let stream = AsyncStream<PlaybackCoordinatorSnapshot>.makeStream(
             bufferingPolicy: .bufferingNewest(32)
         )
@@ -106,6 +118,13 @@ public actor PlaybackCoordinator {
         self.snapshotContinuation = stream.continuation
         self.renderer = renderer
         self.configuration = configuration
+        self.diagnosticRecorder = diagnosticRecorder
+        self.diagnosticContext = diagnosticContext
+        self.identityProvider = identityProvider
+        self.stateMachine = PlaybackSession(
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: diagnosticContext
+        )
         stream.continuation.yield(.idle)
     }
 
@@ -327,7 +346,10 @@ public actor PlaybackCoordinator {
             cachedReader = try CachedMediaReader(
                 file: file,
                 pageSize: configuration.pageSize,
-                capacityBytes: configuration.cacheCapacityBytes
+                capacityBytes: configuration.cacheCapacityBytes,
+                diagnosticRecorder: diagnosticRecorder,
+                diagnosticContext: diagnosticContext,
+                identityProvider: identityProvider
             )
         } catch {
             await file.close()

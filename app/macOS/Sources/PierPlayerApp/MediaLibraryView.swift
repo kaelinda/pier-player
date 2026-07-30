@@ -163,9 +163,13 @@ struct MediaLibraryView: View {
             }
         }
         .sheet(item: $playerSelection) { selection in
+            let diagnostics = model.makePlaybackDiagnosticDependencies()
             VideoPlayerSheet(
                 item: selection.item.media,
-                source: selection.source.source
+                source: selection.source.source,
+                diagnosticRecorder: diagnostics.recorder,
+                diagnosticContext: diagnostics.context,
+                identityProvider: diagnostics.identityProvider
             )
         }
     }
