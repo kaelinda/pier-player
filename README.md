@@ -23,6 +23,8 @@ The current `main` branch provides:
   `AVAssetResourceLoader` and `AVPlayer`.
 - Shared source, cache, playback-state, and telemetry foundations for later
   Apple-platform clients.
+- Privacy-bounded local diagnostics for resource access and playback behavior,
+  with an in-app Settings view and explicit support-bundle export.
 - An opt-in `SMBProbe` command for NAS connectivity and throughput checks.
 
 The current player does **not** yet support MKV, AVI, MPEG-TS, WebM, subtitles,
@@ -80,6 +82,36 @@ That duplicate plaintext storage must be removed before the application is
 considered safe for general use or distribution. Logs and bug reports must also
 redact SMB hosts, paths, usernames, and passwords.
 
+## Local Diagnostics
+
+Open **Settings > Diagnostics** to inspect local diagnostic status and recent
+sessions. Standard mode is enabled by default and records important resource,
+stream, playback, lifecycle, and failure events. Detailed Diagnostics records
+the full privacy-safe event stream for 30 minutes and can be stopped early.
+
+Defined playback, SMB, EOF, stall, event-loss, and close failures automatically
+capture the preceding two minutes from the bounded in-memory flight recorder,
+then retain up to 30 seconds of follow-up evidence. On-disk runs are retained for
+seven days and capped at 100 MiB; cleanup never deletes the active run.
+
+Diagnostics remain on this Mac until **Export** is selected. An exported
+`.pierdiag` package contains exactly `manifest.json`, `events.jsonl`,
+`metrics.jsonl`, `summary.json`, and `integrity.json`. Validate or inspect it
+without NAS access:
+
+```bash
+cd app
+swift run DiagnosticsReport /path/to/support.pierdiag --validate
+swift run DiagnosticsReport /path/to/support.pierdiag --timeline
+```
+
+Persisted and exported records exclude credentials, domains, usernames, hosts,
+shares, source display names, media and directory names, paths, SMB URLs, query
+strings, media bytes, native pointers, and unrestricted native error messages.
+Source IDs are opaque UUIDs and file identities are HMAC-derived with a
+per-install Keychain key. Every export passes an integrity and privacy audit
+before it is made available to save.
+
 ## SMB Diagnostics
 
 `SMBProbe` checks a connection without launching the UI. It can also read a
@@ -112,6 +144,7 @@ All build commands run from `app/`.
 
 | Path | Responsibility |
 | --- | --- |
+| `app/Shared/Sources/DiagnosticsKit/` | Typed local events, bounded capture, retention, privacy audit, and export |
 | `app/Shared/Sources/MediaSourceKit/` | Source-neutral directory listing, file identity, and random-access file contracts |
 | `app/Shared/Sources/SMBSourceKit/` | `libsmb2` integration, SMB configuration, credentials, and persisted sources |
 | `app/Shared/Sources/StreamIOKit/` | Bounded page cache and range-reader metrics |
@@ -120,6 +153,7 @@ All build commands run from `app/`.
 | `app/macOS/` | Implemented SwiftUI application and macOS tests |
 | `app/iOS/`, `app/tvOS/` | Reserved platform-client directories; not implemented yet |
 | `app/Tools/SMBProbe/` | Opt-in SMB connectivity and throughput diagnostic |
+| `app/Tools/DiagnosticsReport/` | Offline validation and reporting for exported `.pierdiag` packages |
 | `app/Vendor/libsmb2/` | Pinned native SMB dependency submodule |
 | `docs/superpowers/` | Accepted designs and implementation plans |
 
@@ -136,6 +170,7 @@ swift build                 # Build libraries and the macOS executable
 swift test                  # Run all Swift Testing suites
 swift run PierPlayerApp     # Launch the macOS app
 swift run SMBProbe --help   # Show diagnostic options
+swift run DiagnosticsReport --help # Show support-bundle options
 scripts/check.sh            # Test, Release-build, and check whitespace
 ```
 
@@ -155,6 +190,7 @@ owned playback engine remains a separate milestone.
 - [Progressive AVFoundation playback](docs/superpowers/specs/2026-07-30-progressive-avfoundation-playback-design.md)
 - [Media library home](docs/superpowers/specs/2026-07-30-media-library-home-design.md)
 - [Broad-format playback design](docs/superpowers/specs/2026-07-30-broad-format-playback-design.md)
+- [Local diagnostics toolkit](docs/superpowers/specs/2026-07-30-local-diagnostics-toolkit-design.md)
 
 The broad-format design requires a pinned, LGPL-compatible FFmpeg build. Do not
 add GPL player dependencies or link a GPL-enabled Homebrew FFmpeg build into a

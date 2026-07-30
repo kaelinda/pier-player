@@ -11,6 +11,7 @@ public struct DiagnosticFlightRecorder: Sendable {
     public private(set) var encodedByteCount = 0
 
     private var entries: [Entry] = []
+    private var headIndex = 0
 
     public init(maximumAge: TimeInterval = 120, maximumEncodedBytes: Int = 8 * 1_024 * 1_024) {
         precondition(maximumAge > 0)
@@ -20,7 +21,7 @@ public struct DiagnosticFlightRecorder: Sendable {
     }
 
     public var events: [DiagnosticEvent] {
-        entries.map(\.event)
+        entries[headIndex...].map(\.event)
     }
 
     public mutating func append(_ event: DiagnosticEvent, encodedByteCount: Int) {
@@ -32,13 +33,13 @@ public struct DiagnosticFlightRecorder: Sendable {
         self.encodedByteCount += encodedByteCount
         evict(olderThan: event.wallTime.addingTimeInterval(-maximumAge))
 
-        while self.encodedByteCount > maximumEncodedBytes, !entries.isEmpty {
+        while self.encodedByteCount > maximumEncodedBytes, headIndex < entries.endIndex {
             removeFirst()
         }
     }
 
     public mutating func evict(olderThan cutoff: Date) {
-        while let first = entries.first, first.event.wallTime < cutoff {
+        while headIndex < entries.endIndex, entries[headIndex].event.wallTime < cutoff {
             removeFirst()
         }
     }
@@ -49,11 +50,20 @@ public struct DiagnosticFlightRecorder: Sendable {
 
     public mutating func removeAll() {
         entries.removeAll(keepingCapacity: true)
+        headIndex = 0
         encodedByteCount = 0
     }
 
     private mutating func removeFirst() {
-        let removed = entries.removeFirst()
+        let removed = entries[headIndex]
+        headIndex += 1
         encodedByteCount -= removed.encodedByteCount
+        compactIfNeeded()
+    }
+
+    private mutating func compactIfNeeded() {
+        guard headIndex >= 1_024, headIndex * 2 >= entries.count else { return }
+        entries.removeFirst(headIndex)
+        headIndex = 0
     }
 }
