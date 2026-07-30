@@ -5,7 +5,9 @@ import SwiftUI
 enum PlaybackControlCopy {
     static func timeLabel(_ time: TimeInterval) -> String {
         guard time.isFinite, time >= 0 else { return "0:00" }
-        let seconds = Int(time.rounded(.down))
+        let roundedSeconds = time.rounded(.down)
+        guard roundedSeconds < Double(Int.max) else { return "0:00" }
+        let seconds = Int(roundedSeconds)
         let hours = seconds / 3_600
         let minutes = (seconds % 3_600) / 60
         let remainingSeconds = seconds % 60
