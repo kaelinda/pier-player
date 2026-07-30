@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import FFmpegKit
 import Foundation
 
 @MainActor
@@ -10,6 +11,10 @@ public final class SampleBufferRenderer {
 
     private let synchronizer: AVSampleBufferRenderSynchronizer
     private let videoRenderer: any AVQueuedSampleBufferRendering
+    private let readinessQueue = DispatchQueue(
+        label: "dev.pierplayer.render.readiness",
+        qos: .userInitiated
+    )
     private var lastVideoEndTime: TimeInterval = 0
     private var lastAudioEndTime: TimeInterval = 0
 
@@ -69,6 +74,11 @@ public final class SampleBufferRenderer {
     }
 
     @discardableResult
+    public func enqueueVideo(_ sample: DecodedVideoSample) throws -> Bool {
+        try enqueueVideo(MediaSampleFactory.videoSample(from: sample))
+    }
+
+    @discardableResult
     public func enqueueAudio(_ sample: CMSampleBuffer) -> Bool {
         guard canEnqueue(sample, lastEndTime: lastAudioEndTime),
               audioRenderer.isReadyForMoreMediaData else {
@@ -77,6 +87,11 @@ public final class SampleBufferRenderer {
         audioRenderer.enqueue(sample)
         lastAudioEndTime = max(lastAudioEndTime, endTime(of: sample))
         return true
+    }
+
+    @discardableResult
+    public func enqueueAudio(_ sample: DecodedAudioSample) throws -> Bool {
+        try enqueueAudio(MediaSampleFactory.audioSample(from: sample))
     }
 
     public func play(at time: TimeInterval? = nil) {
@@ -130,6 +145,29 @@ public final class SampleBufferRenderer {
         renderer(for: lane).stopRequestingMediaData()
     }
 
+    public func isReady(for lane: RenderLane) -> Bool {
+        renderer(for: lane).isReadyForMoreMediaData
+    }
+
+    public func waitUntilReady(for lane: RenderLane) async throws {
+        if isReady(for: lane) { return }
+        let waiter = RendererReadinessWaiter()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                waiter.install(continuation)
+                renderer(for: lane).requestMediaDataWhenReady(
+                    on: readinessQueue
+                ) {
+                    waiter.resume()
+                }
+            }
+        } onCancel: {
+            waiter.resume()
+        }
+        stopRequestingMediaData(for: lane)
+        try Task.checkCancellation()
+    }
+
     private func renderer(
         for lane: RenderLane
     ) -> any AVQueuedSampleBufferRendering {
@@ -159,5 +197,33 @@ public final class SampleBufferRenderer {
             seconds: seconds.isFinite ? max(0, seconds) : 0,
             preferredTimescale: 1_000_000
         )
+    }
+}
+
+private final class RendererReadinessWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var wasResumed = false
+
+    func install(_ continuation: CheckedContinuation<Void, Never>) {
+        let resumeImmediately = lock.withLock {
+            if wasResumed { return true }
+            self.continuation = continuation
+            return false
+        }
+        if resumeImmediately {
+            continuation.resume()
+        }
+    }
+
+    func resume() {
+        let continuation = lock.withLock {
+            guard !wasResumed else { return nil as CheckedContinuation<Void, Never>? }
+            wasResumed = true
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume()
     }
 }

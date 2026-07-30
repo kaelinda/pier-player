@@ -136,6 +136,16 @@ public actor PlaybackSession {
         update(state: .failed(message), intendsToPlay: false)
     }
 
+    @discardableResult
+    public func playbackEnded(
+        token: PlaybackOperationToken,
+        position: TimeInterval
+    ) -> Bool {
+        guard accepts(token) else { return false }
+        update(state: .ended, intendsToPlay: false, position: position)
+        return true
+    }
+
     private func accepts(_ token: PlaybackOperationToken) -> Bool {
         token.sessionID == snapshot.sessionID && token.generation == snapshot.generation
     }

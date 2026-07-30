@@ -53,6 +53,7 @@ public final class FFmpegSession: @unchecked Sendable {
                 message: "probe time limit exceeded"
             )
         }
+        bridge.finishProbing()
 
         self.bridge = bridge
         self.nativeSession = session
@@ -306,10 +307,10 @@ public final class FFmpegSession: @unchecked Sendable {
     }
 
     public func cancel() {
+        bridge.cancel()
         lock.withLock {
             guard nativeSession != nil else { return }
             isCancelled = true
-            bridge.cancel()
         }
     }
 

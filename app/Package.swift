@@ -67,6 +67,13 @@ let package = Package(
         ),
         .target(
             name: "PlaybackCore",
+            dependencies: [
+                "MediaSourceKit",
+                "StreamIOKit",
+                "FFmpegKit",
+                "RenderKit",
+                "SubtitleKit",
+            ],
             path: "Shared/Sources/PlaybackCore"
         ),
         .target(
@@ -130,7 +137,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PlaybackCoreTests",
-            dependencies: ["PlaybackCore"],
+            dependencies: ["PlaybackCore", "MediaSourceKit", "RenderKit"],
             path: "Shared/Tests/PlaybackCoreTests"
         ),
         .testTarget(

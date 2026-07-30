@@ -13,6 +13,7 @@ final class FFmpegIOBridge: @unchecked Sendable {
     private let deadline: TimeInterval
     private var position: Int64 = 0
     private var remainingBytes: Int64
+    private var isProbing = true
     private var isCancelled = false
 
     init(source: any FFmpegByteSource, limits: FFmpegProbeLimits) {
@@ -36,17 +37,25 @@ final class FFmpegIOBridge: @unchecked Sendable {
         }
     }
 
+    func finishProbing() {
+        lock.withLock {
+            isProbing = false
+            remainingBytes = Int64.max
+        }
+    }
+
     fileprivate func read(into buffer: UnsafeMutablePointer<UInt8>, length: Int) -> Int32 {
         lock.lock()
         defer { lock.unlock() }
 
-        guard !shouldInterruptLocked(), remainingBytes > 0 else {
+        guard !shouldInterruptLocked(), !isProbing || remainingBytes > 0 else {
             return Int32(PPFF_ERROR_IO)
         }
         guard position < source.size else { return Int32(PPFF_ERROR_EOF) }
 
         let available = source.size - position
-        let readLength = Int(min(Int64(length), available, remainingBytes))
+        let permittedLength = isProbing ? remainingBytes : Int64(length)
+        let readLength = Int(min(Int64(length), available, permittedLength))
         guard readLength > 0 else { return Int32(PPFF_ERROR_EOF) }
 
         do {
@@ -59,7 +68,9 @@ final class FFmpegIOBridge: @unchecked Sendable {
                 }
             }
             position += Int64(copiedCount)
-            remainingBytes -= Int64(copiedCount)
+            if isProbing {
+                remainingBytes -= Int64(copiedCount)
+            }
             return Int32(copiedCount)
         } catch {
             return Int32(PPFF_ERROR_IO)
@@ -102,7 +113,7 @@ final class FFmpegIOBridge: @unchecked Sendable {
     }
 
     private func shouldInterruptLocked() -> Bool {
-        isCancelled || ProcessInfo.processInfo.systemUptime >= deadline
+        isCancelled || (isProbing && ProcessInfo.processInfo.systemUptime >= deadline)
     }
 }
 
