@@ -20,7 +20,10 @@ let package = Package(
     targets: [
         .target(
             name: "DiagnosticsKit",
-            path: "Shared/Sources/DiagnosticsKit"
+            path: "Shared/Sources/DiagnosticsKit",
+            linkerSettings: [
+                .linkedFramework("Security"),
+            ]
         ),
         .target(
             name: "CLibSMB2",
