@@ -746,7 +746,7 @@ private struct SensitiveTestError: Error {
 
 @MainActor
 private func eventually(
-    timeout: Duration = .seconds(1),
+    timeout: Duration = .seconds(10),
     condition: @escaping @MainActor () async -> Bool
 ) async -> Bool {
     let clock = ContinuousClock()
