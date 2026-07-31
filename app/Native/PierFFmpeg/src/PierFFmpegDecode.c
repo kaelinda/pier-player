@@ -5,6 +5,45 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    PPFF_MAX_CONSECUTIVE_CORRUPT_PACKETS = 8
+};
+
+static int *ppff_corrupt_packet_counter(
+    PPFFSession *session,
+    const AVCodecContext *decoder
+) {
+    if (decoder == session->video_decoder) {
+        return &session->consecutive_video_corrupt_packets;
+    }
+    return &session->consecutive_audio_corrupt_packets;
+}
+
+static int ppff_skip_corrupt_packet(
+    PPFFSession *session,
+    AVCodecContext *decoder,
+    PPFFError *error
+) {
+    int *counter = ppff_corrupt_packet_counter(session, decoder);
+    *counter += 1;
+    if (*counter > PPFF_MAX_CONSECUTIVE_CORRUPT_PACKETS) {
+        ppff_error_set(error, AVERROR_INVALIDDATA, "decode corrupt media");
+        return AVERROR_INVALIDDATA;
+    }
+    return 0;
+}
+
+static void ppff_record_decode_progress(
+    PPFFSession *session,
+    PPFFSampleKind kind
+) {
+    if (kind == PPFF_SAMPLE_KIND_VIDEO) {
+        session->consecutive_video_corrupt_packets = 0;
+    } else if (kind == PPFF_SAMPLE_KIND_AUDIO) {
+        session->consecutive_audio_corrupt_packets = 0;
+    }
+}
+
 void ppff_decode_destroy(PPFFSession *session) {
     if (session == NULL) {
         return;
@@ -49,6 +88,8 @@ int ppff_session_prepare_decoders(
     session->last_video_pts_us = INT64_MIN;
     session->next_audio_pts_us = AV_NOPTS_VALUE;
     session->seek_target_us = AV_NOPTS_VALUE;
+    session->consecutive_video_corrupt_packets = 0;
+    session->consecutive_audio_corrupt_packets = 0;
     int result = ppff_video_decoder_open(session, configuration, error);
     if (result < 0) {
         ppff_decode_destroy(session);
@@ -96,6 +137,8 @@ static void ppff_reset_after_seek(PPFFSession *session, int64_t target_us) {
     session->seek_in_progress = 1;
     session->video_seek_ready = session->video_decoder == NULL;
     session->audio_seek_ready = session->audio_decoder == NULL;
+    session->consecutive_video_corrupt_packets = 0;
+    session->consecutive_audio_corrupt_packets = 0;
 }
 
 int ppff_session_seek(
@@ -250,6 +293,7 @@ int ppff_session_read_next(
     while (1) {
         int video_result = ppff_video_receive(session, sample, error);
         if (video_result > 0) {
+            ppff_record_decode_progress(session, sample->kind);
             if (session->seek_in_progress &&
                 sample->presentation_time_us < session->seek_target_us) {
                 ppff_sample_release(sample);
@@ -264,6 +308,17 @@ int ppff_session_read_next(
         if (video_result < 0 &&
             video_result != AVERROR(EAGAIN) &&
             video_result != AVERROR_EOF) {
+            if (video_result == AVERROR_INVALIDDATA) {
+                int corrupt_result = ppff_skip_corrupt_packet(
+                    session,
+                    session->video_decoder,
+                    error
+                );
+                if (corrupt_result >= 0) {
+                    continue;
+                }
+                return corrupt_result;
+            }
             if (session->video_decoder_mode == PPFF_DECODER_MODE_VIDEOTOOLBOX &&
                 session->software_fallback_count == 0) {
                 int fallback_result = ppff_video_decoder_fallback_to_software(session, error);
@@ -277,6 +332,7 @@ int ppff_session_read_next(
 
         int audio_result = ppff_audio_receive(session, sample, error);
         if (audio_result > 0) {
+            ppff_record_decode_progress(session, sample->kind);
             if (session->seek_in_progress &&
                 sample->presentation_time_us < session->seek_target_us) {
                 ppff_sample_release(sample);
@@ -291,6 +347,17 @@ int ppff_session_read_next(
         if (audio_result < 0 &&
             audio_result != AVERROR(EAGAIN) &&
             audio_result != AVERROR_EOF) {
+            if (audio_result == AVERROR_INVALIDDATA) {
+                int corrupt_result = ppff_skip_corrupt_packet(
+                    session,
+                    session->audio_decoder,
+                    error
+                );
+                if (corrupt_result >= 0) {
+                    continue;
+                }
+                return corrupt_result;
+            }
             return audio_result;
         }
 
@@ -347,9 +414,25 @@ int ppff_session_read_next(
             continue;
         }
 
+        if ((session->packet->flags & AV_PKT_FLAG_CORRUPT) != 0) {
+            int corrupt_result = ppff_skip_corrupt_packet(session, decoder, error);
+            av_packet_unref(session->packet);
+            if (corrupt_result < 0) {
+                return corrupt_result;
+            }
+            continue;
+        }
+
         int send_result = avcodec_send_packet(decoder, session->packet);
         av_packet_unref(session->packet);
         if (send_result < 0 && send_result != AVERROR(EAGAIN)) {
+            if (send_result == AVERROR_INVALIDDATA) {
+                int corrupt_result = ppff_skip_corrupt_packet(session, decoder, error);
+                if (corrupt_result >= 0) {
+                    continue;
+                }
+                return corrupt_result;
+            }
             ppff_error_set(error, send_result, "submit media packet");
             return send_result;
         }

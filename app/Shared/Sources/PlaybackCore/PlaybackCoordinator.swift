@@ -501,6 +501,7 @@ public actor PlaybackCoordinator {
                 await fail(
                     PlaybackFailure(
                         boundary: .fileChanged,
+                        reason: .fileChanged,
                         message: "The media file changed while reconnecting"
                     )
                 )
@@ -554,6 +555,7 @@ public actor PlaybackCoordinator {
         await fail(
             PlaybackFailure(
                 boundary: .networkRead,
+                reason: .network,
                 message: "The media source stopped responding"
             )
         )
@@ -839,7 +841,11 @@ public actor PlaybackCoordinator {
         } catch {
             guard accepts(token) else { return }
             await fail(
-                PlaybackFailure(boundary: .render, message: "Unable to render video sample")
+                PlaybackFailure(
+                    boundary: .render,
+                    reason: .rendering,
+                    message: "Unable to render video sample"
+                )
             )
         }
     }
@@ -870,7 +876,11 @@ public actor PlaybackCoordinator {
         } catch {
             guard accepts(token) else { return }
             await fail(
-                PlaybackFailure(boundary: .render, message: "Unable to render audio sample")
+                PlaybackFailure(
+                    boundary: .render,
+                    reason: .rendering,
+                    message: "Unable to render audio sample"
+                )
             )
         }
     }
@@ -1154,23 +1164,7 @@ public actor PlaybackCoordinator {
     }
 
     private func nativeFailure(_ error: Error) -> PlaybackFailure {
-        if case let FFmpegError.native(code, message) = error {
-            return PlaybackFailure(
-                boundary: .demux,
-                message: message,
-                diagnosticCode: code
-            )
-        }
-        if error is BlockingMediaReaderError {
-            return PlaybackFailure(
-                boundary: .networkRead,
-                message: "The media source stopped responding"
-            )
-        }
-        return PlaybackFailure(
-            boundary: .demux,
-            message: "Playback could not continue"
-        )
+        PlaybackFailure.classify(error)
     }
 }
 

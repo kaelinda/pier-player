@@ -100,6 +100,10 @@ final class VideoPlayerModel: ObservableObject {
         consumeSnapshots()
         updateProgress()
 
+        await openAndStartPlayback()
+    }
+
+    private func openAndStartPlayback() async {
         do {
             let file = try await openPlaybackFile(
                 source: source,
@@ -145,13 +149,25 @@ final class VideoPlayerModel: ObservableObject {
     func stop() async {
         guard hasStarted else { return }
         hasStarted = false
+        let snapshotTask = self.snapshotTask
+        let progressTask = self.progressTask
+        self.snapshotTask = nil
+        self.progressTask = nil
         snapshotTask?.cancel()
         progressTask?.cancel()
-        snapshotTask = nil
-        progressTask = nil
+        await snapshotTask?.value
+        await progressTask?.value
         await coordinator.stop()
         snapshot = .idle
         timelinePosition = 0
+    }
+
+    func retry() async {
+        guard hasStarted, case .failed = snapshot.state else { return }
+        await coordinator.stop()
+        snapshot = .idle
+        timelinePosition = 0
+        await openAndStartPlayback()
     }
 
     func togglePlayback() async {
@@ -287,18 +303,18 @@ final class VideoPlayerModel: ObservableObject {
     }
 
     private func publishFailure(_ error: Error) {
-        let message = String(describing: error)
+        let failure = PlaybackFailure.classify(error, defaultBoundary: .sourceOpen)
         snapshot = PlaybackCoordinatorSnapshot(
             sessionID: snapshot.sessionID,
             generation: snapshot.generation,
-            state: .failed(message),
+            state: .failed(failure.message),
             intendsToPlay: false,
             position: timelinePosition,
             duration: snapshot.duration,
             videoDecoderMode: snapshot.videoDecoderMode,
             tracks: snapshot.tracks,
             subtitleText: snapshot.subtitleText,
-            failure: PlaybackFailure(boundary: .sourceOpen, message: message)
+            failure: failure
         )
     }
 }

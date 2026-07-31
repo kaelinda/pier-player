@@ -43,6 +43,8 @@ struct PPFFSession {
     int seek_in_progress;
     int video_seek_ready;
     int audio_seek_ready;
+    int consecutive_video_corrupt_packets;
+    int consecutive_audio_corrupt_packets;
 };
 
 void ppff_error_clear(PPFFError *error);

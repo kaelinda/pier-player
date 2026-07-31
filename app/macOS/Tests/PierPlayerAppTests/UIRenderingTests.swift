@@ -367,6 +367,41 @@ func playerRendersLongMetadataAtSupportedSizes(size: CGSize) async throws {
 }
 
 @MainActor
+@Test func videoPlayerSheetRendersFriendlyCorruptMediaFailure() async throws {
+    let size = CGSize(width: 760, height: 520)
+    let item = testVideoItem()
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: item,
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
+    await model.start()
+    coordinator.send(snapshot(
+        state: .failed("submit media packet: Invalid NAL unit size"),
+        failure: PlaybackFailure(
+            boundary: .videoDecode,
+            reason: .corruptMedia,
+            message: "submit media packet: Invalid NAL unit size",
+            diagnosticCode: -1_094_995_529
+        )
+    ))
+    try await waitForModel(model) { $0.failure?.reason == .corruptMedia }
+
+    let image = try render(
+        VideoPlayerSheet(item: item, playerModel: model)
+            .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 8)
+    try writeSnapshotIfRequested(image, name: "video-player-corrupt-media")
+}
+
+@MainActor
 @Test(arguments: DiagnosticSettingsRenderingFixture.all)
 private func diagnosticsSettingsRendersAllOperationalStates(
     fixture: DiagnosticSettingsRenderingFixture

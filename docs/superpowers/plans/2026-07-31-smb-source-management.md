@@ -140,7 +140,7 @@ Run: `git diff --check && git status --short && git diff --stat`
 
 Expected: no whitespace errors and no unrelated paths staged.
 
-- [ ] **Step 4: Commit, update from main, and verify again**
+- [x] **Step 4: Commit, update from main, and verify again**
 
 Use focused Conventional Commits, fetch `origin`, merge current `origin/main` if needed, and rerun `cd app && scripts/check.sh` after integration.
 

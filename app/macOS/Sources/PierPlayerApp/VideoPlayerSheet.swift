@@ -128,8 +128,15 @@ struct VideoPlayerSheet: View {
             .padding(14)
             .background(.black.opacity(0.68))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        case .failed(let message):
-            PlayerFailureView(message: message)
+        case .failed:
+            PlayerFailureView(
+                presentation: PlayerFailurePresentation(
+                    failure: playerModel.snapshot.failure
+                ),
+                retry: {
+                    Task { await playerModel.retry() }
+                }
+            )
         default:
             EmptyView()
         }
@@ -185,20 +192,38 @@ struct VideoPlayerSheet: View {
 }
 
 private struct PlayerFailureView: View {
-    let message: String
+    let presentation: PlayerFailurePresentation
+    let retry: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: presentation.systemImage)
                 .font(.system(size: 28))
                 .foregroundStyle(.orange)
-            Text("Playback Failed")
+            Text(presentation.title)
                 .font(.headline)
-            Text(message)
+            Text(presentation.message)
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
-                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if presentation.canRetry {
+                Button(action: retry) {
+                    Label("Try Again", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            DisclosureGroup("Technical Details") {
+                Text(presentation.technicalDetails)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.white.opacity(0.62))
+                    .textSelection(.enabled)
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.7))
+            .frame(maxWidth: 360, alignment: .leading)
         }
         .foregroundStyle(.white)
         .padding(24)
