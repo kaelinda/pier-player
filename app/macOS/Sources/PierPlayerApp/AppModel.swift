@@ -80,6 +80,7 @@ final class AppModel: ObservableObject {
 
         let storedSources: [SMBStorageSource]
         do {
+            try await sourceStore.migrateCredentials(to: credentialStore)
             storedSources = try await sourceStore.load()
         } catch {
             operation.end(
@@ -118,29 +119,10 @@ final class AppModel: ObservableObject {
         _ stored: SMBStorageSource,
         context: DiagnosticContext
     ) async throws {
-        let credential = try SMBCredential(username: stored.username, password: stored.password)
-        do {
-            try await credentialStore.save(
-                sourceID: stored.id,
-                credential: credential,
-                domain: stored.domain
-            )
-        } catch {
-            diagnosticRecorder.record(.instant(
-                level: .warning,
-                name: .sourceRestore,
-                context: context,
-                outcome: .failure,
-                payload: DiagnosticPayload(
-                    sourceID: stored.id,
-                    error: DiagnosticErrorDescriptor(
-                        code: .diagnosticsStorageFailed,
-                        isRetryable: true
-                    )
-                ),
-                persistence: .essential
-            ))
+        guard let storedCredential = try await credentialStore.load(sourceID: stored.id) else {
+            throw MediaSourceError.notConnected
         }
+        let credential = storedCredential.credential
         let configuration = try SMBConnectionConfiguration(
             sourceID: stored.id,
             displayName: stored.displayName,
@@ -208,7 +190,7 @@ final class AppModel: ObservableObject {
                 credential: credential,
                 domain: configuration.domain
             )
-            try await sourceStore.add(SMBStorageSource.from(configuration: configuration, credential: credential))
+            try await sourceStore.add(SMBStorageSource.from(configuration: configuration))
             sources.append(ConnectedSource(
                 id: configuration.sourceID,
                 displayName: configuration.displayName,
@@ -241,14 +223,10 @@ final class AppModel: ObservableObject {
         guard let previousStorage = storedSources.first(where: { $0.id == id }) else {
             throw SMBSourceStoreError.sourceNotFound(id)
         }
-        let credentialToRestore = try StoredSMBCredential(
-            credential: SMBCredential(
-                username: previousStorage.username,
-                password: previousStorage.password
-            ),
-            domain: previousStorage.domain
-        )
-        let password = replacementPassword ?? previousStorage.password
+        guard let storedCredential = try await credentialStore.load(sourceID: id) else {
+            throw MediaSourceError.notConnected
+        }
+        let password = replacementPassword ?? storedCredential.credential.password
         let configuration = try SMBConnectionConfiguration(
             sourceID: id,
             displayName: displayName,
@@ -272,27 +250,29 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            try await sourceStore.update(SMBStorageSource.from(
+                configuration: configuration
+            ))
+        } catch {
+            await replacementSource.disconnect()
+            throw SMBSourceUpdateError.changesNotSaved
+        }
+
+        do {
             try await credentialStore.save(
                 sourceID: id,
                 credential: credential,
                 domain: configuration.domain
             )
-            do {
-                try await sourceStore.update(SMBStorageSource.from(
-                    configuration: configuration,
-                    credential: credential
-                ))
-            } catch {
-                do {
-                    try await restoreCredential(credentialToRestore, sourceID: id)
-                } catch {
-                    throw SMBSourceUpdateError.credentialRollbackFailed
-                }
-                throw SMBSourceUpdateError.changesNotSaved
-            }
         } catch {
+            do {
+                try await sourceStore.update(previousStorage)
+            } catch {
+                await replacementSource.disconnect()
+                throw SMBSourceUpdateError.credentialRollbackFailed
+            }
             await replacementSource.disconnect()
-            throw error
+            throw SMBSourceUpdateError.changesNotSaved
         }
 
         let previousSource = sources[sourceIndex].source
@@ -391,28 +371,6 @@ final class AppModel: ObservableObject {
             diagnosticRecorder: diagnosticRecorder,
             diagnosticContext: context,
             identityProvider: identityProvider
-        )
-    }
-
-    private func restoreCredential(
-        _ storedCredential: StoredSMBCredential,
-        sourceID: UUID
-    ) async throws {
-        do {
-            try await saveCredential(storedCredential, sourceID: sourceID)
-        } catch {
-            try await saveCredential(storedCredential, sourceID: sourceID)
-        }
-    }
-
-    private func saveCredential(
-        _ storedCredential: StoredSMBCredential,
-        sourceID: UUID
-    ) async throws {
-        try await credentialStore.save(
-            sourceID: sourceID,
-            credential: storedCredential.credential,
-            domain: storedCredential.domain
         )
     }
 

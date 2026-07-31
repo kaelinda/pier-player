@@ -52,7 +52,8 @@ import Testing
     let stored = try #require(await fixture.sourceStore.load().first)
     #expect(stored.id == sourceID)
     #expect(stored.displayName == "Living Room")
-    #expect(stored.password == "existing-secret")
+    let savedCredential = try #require(await fixture.credentialStore.load(sourceID: sourceID))
+    #expect(savedCredential.credential.password == "existing-secret")
     #expect(await originalSource.disconnectCount == 1)
     #expect(await fixture.factory.sources.last?.connectCount == 1)
 }
@@ -130,17 +131,16 @@ import Testing
 }
 
 @MainActor
-@Test func rollbackFailureIsReportedWithoutReplacingTheLiveSource() async throws {
+@Test func credentialFailureRollsBackMetadataWithoutReplacingTheLiveSource() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
 
     try await addExistingSource(to: model)
     let sourceID = try #require(model.sources.first?.id)
     let originalSource = try #require(fixture.factory.sources.first)
-    await fixture.sourceStore.failNextUpdate()
-    await fixture.credentialStore.failSave(afterSuccessfulSaves: 1, failureCount: 2)
+    await fixture.credentialStore.failSave(afterSuccessfulSaves: 0, failureCount: 1)
 
-    await #expect(throws: SMBSourceUpdateError.credentialRollbackFailed) {
+    await #expect(throws: SMBSourceUpdateError.changesNotSaved) {
         try await updateExistingSource(id: sourceID, in: model)
     }
 
@@ -148,30 +148,27 @@ import Testing
     #expect(model.sourceRevision == 1)
     #expect(await originalSource.disconnectCount == 0)
     #expect(await fixture.factory.sources.last?.disconnectCount == 1)
-    #expect(
-        AppModel.connectionErrorMessage(for: SMBSourceUpdateError.credentialRollbackFailed)
-            == "The changes were not saved, and the previous credentials could not be restored."
-    )
+    let stored = try #require(await fixture.sourceStore.load().first)
+    #expect(stored.displayName == "Home NAS")
 }
 
 @MainActor
-@Test func restoreReconcilesCredentialsAfterRollbackExhaustion() async throws {
+@Test func restoreUsesCredentialPreservedByMetadataRollback() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
 
     try await addExistingSource(to: model)
     let sourceID = try #require(model.sources.first?.id)
-    await fixture.sourceStore.failNextUpdate()
-    await fixture.credentialStore.failSave(afterSuccessfulSaves: 1, failureCount: 2)
+    await fixture.credentialStore.failSave(afterSuccessfulSaves: 0, failureCount: 1)
 
-    await #expect(throws: SMBSourceUpdateError.credentialRollbackFailed) {
+    await #expect(throws: SMBSourceUpdateError.changesNotSaved) {
         try await updateExistingSource(id: sourceID, in: model)
     }
 
     let staleCredential = try #require(await fixture.credentialStore.load(sourceID: sourceID))
-    #expect(staleCredential.credential.username == "editor")
-    #expect(staleCredential.credential.password == "replacement")
-    #expect(staleCredential.domain == "WORKGROUP")
+    #expect(staleCredential.credential.username == "viewer")
+    #expect(staleCredential.credential.password == "existing-secret")
+    #expect(staleCredential.domain == nil)
 
     let recoveryFactory = SourceManagementSourceFactory()
     let recoveredModel = AppModel(
@@ -193,16 +190,15 @@ import Testing
 }
 
 @MainActor
-@Test func retryAfterRollbackExhaustionPreservesTheActivePassword() async throws {
+@Test func retryAfterCredentialFailurePreservesTheActivePassword() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
 
     try await addExistingSource(to: model)
     let sourceID = try #require(model.sources.first?.id)
-    await fixture.sourceStore.failNextUpdate()
-    await fixture.credentialStore.failSave(afterSuccessfulSaves: 1, failureCount: 2)
+    await fixture.credentialStore.failSave(afterSuccessfulSaves: 0, failureCount: 1)
 
-    await #expect(throws: SMBSourceUpdateError.credentialRollbackFailed) {
+    await #expect(throws: SMBSourceUpdateError.changesNotSaved) {
         try await updateExistingSource(id: sourceID, in: model)
     }
 
@@ -221,11 +217,11 @@ import Testing
     let credential = try #require(await fixture.credentialStore.load(sourceID: sourceID))
     #expect(credential.credential.password == "existing-secret")
     let stored = try #require(await fixture.sourceStore.load().first)
-    #expect(stored.password == "existing-secret")
+    #expect(stored.id == sourceID)
 }
 
 @MainActor
-@Test func failedCredentialReconciliationIsDiagnosedAndRetried() async throws {
+@Test func restoreTreatsKeychainAsTheCredentialAuthority() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
 
@@ -236,37 +232,22 @@ import Testing
         credential: SMBCredential(username: "editor", password: "replacement"),
         domain: "WORKGROUP"
     )
-    await fixture.credentialStore.failSave(afterSuccessfulSaves: 0, failureCount: 1)
-
-    let recorder = AppRecordingDiagnosticRecorder()
     let firstRecoveryFactory = SourceManagementSourceFactory()
     let firstRecoveredModel = AppModel(
         credentialStore: fixture.credentialStore,
         sourceStore: fixture.sourceStore,
-        diagnosticRecorder: recorder,
-        diagnosticContext: appDiagnosticContext,
         sourceFactory: firstRecoveryFactory.makeSource
     )
 
     await firstRecoveredModel.restore()
 
     #expect(firstRecoveredModel.source(id: sourceID)?.displayName == "Home NAS")
-    #expect(firstRecoveryFactory.credentials.last?.username == "viewer")
-    #expect(firstRecoveryFactory.credentials.last?.password == "existing-secret")
+    #expect(firstRecoveryFactory.credentials.last?.username == "editor")
+    #expect(firstRecoveryFactory.credentials.last?.password == "replacement")
     #expect(await firstRecoveryFactory.sources.last?.connectCount == 1)
     let staleCredential = try #require(await fixture.credentialStore.load(sourceID: sourceID))
     #expect(staleCredential.credential.username == "editor")
     #expect(staleCredential.credential.password == "replacement")
-
-    let reconciliationEvent = try #require(recorder.snapshot.first { event in
-        event.name == .sourceRestore
-            && event.phase == .instant
-            && event.payload.sourceID == sourceID
-    })
-    #expect(reconciliationEvent.level == .warning)
-    #expect(reconciliationEvent.outcome == .failure)
-    #expect(reconciliationEvent.payload.error?.code == .diagnosticsStorageFailed)
-    #expect(reconciliationEvent.payload.error?.isRetryable == true)
 
     let secondRecoveryFactory = SourceManagementSourceFactory()
     let secondRecoveredModel = AppModel(
@@ -278,8 +259,8 @@ import Testing
     await secondRecoveredModel.restore()
 
     let recoveredCredential = try #require(await fixture.credentialStore.load(sourceID: sourceID))
-    #expect(recoveredCredential.credential.username == "viewer")
-    #expect(recoveredCredential.credential.password == "existing-secret")
+    #expect(recoveredCredential.credential.username == "editor")
+    #expect(recoveredCredential.credential.password == "replacement")
 }
 
 @MainActor

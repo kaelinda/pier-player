@@ -14,11 +14,16 @@ struct KeychainCredentialMetadata: Codable, Equatable, Sendable {
 
 public actor KeychainCredentialStore: SMBCredentialStore {
     private let service: String
+    private let synchronizesCredentials: Bool
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    public init(service: String = "app.pier-player.smb-credentials") {
+    public init(
+        service: String = "app.pier-player.smb-credentials",
+        synchronizesCredentials: Bool = true
+    ) {
         self.service = service
+        self.synchronizesCredentials = synchronizesCredentials
     }
 
     public func save(
@@ -33,12 +38,38 @@ public actor KeychainCredentialStore: SMBCredentialStore {
         )
         let metadataData = try encoder.encode(metadata)
         let secretData = Data(credential.password.utf8)
-        let query = baseQuery(sourceID: sourceID)
-        let attributes: [String: Any] = [
+        do {
+            try save(
+                sourceID: sourceID,
+                metadataData: metadataData,
+                secretData: secretData,
+                synchronizable: synchronizesCredentials
+            )
+        } catch KeychainCredentialStoreError.unexpectedStatus(errSecMissingEntitlement) {
+            try save(
+                sourceID: sourceID,
+                metadataData: metadataData,
+                secretData: secretData,
+                synchronizable: false
+            )
+        }
+    }
+
+    private func save(
+        sourceID: UUID,
+        metadataData: Data,
+        secretData: Data,
+        synchronizable: Bool
+    ) throws {
+        let query = baseQuery(sourceID: sourceID, synchronizable: synchronizable)
+        var attributes: [String: Any] = [
             kSecAttrGeneric as String: metadataData,
             kSecValueData as String: secretData,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
+        if synchronizable {
+            attributes[kSecAttrSynchronizable as String] = kCFBooleanTrue
+        }
 
         let updateStatus = SecItemUpdate(
             query as CFDictionary,
@@ -67,7 +98,22 @@ public actor KeychainCredentialStore: SMBCredentialStore {
 
     private func performLoad(sourceID: UUID) throws -> StoredSMBCredential? {
         try validateService()
-        var query = baseQuery(sourceID: sourceID)
+        do {
+            return try performLoad(
+                sourceID: sourceID,
+                synchronizable: synchronizesCredentials
+            )
+        } catch KeychainCredentialStoreError.unexpectedStatus(errSecMissingEntitlement) {
+            return try performLoad(sourceID: sourceID, synchronizable: false)
+        }
+    }
+
+    private func performLoad(
+        sourceID: UUID,
+        synchronizable: Bool
+    ) throws -> StoredSMBCredential? {
+        try validateService()
+        var query = baseQuery(sourceID: sourceID, synchronizable: synchronizable)
         query[kSecReturnAttributes as String] = true
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -76,7 +122,7 @@ public actor KeychainCredentialStore: SMBCredentialStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else {
-            return nil
+            throw KeychainCredentialStoreError.unexpectedStatus(status)
         }
         guard
             let item = result as? [String: Any],
@@ -102,18 +148,35 @@ public actor KeychainCredentialStore: SMBCredentialStore {
 
     public func delete(sourceID: UUID) throws {
         try validateService()
-        let status = SecItemDelete(baseQuery(sourceID: sourceID) as CFDictionary)
+        let status = SecItemDelete(baseQuery(
+            sourceID: sourceID,
+            synchronizable: synchronizesCredentials
+        ) as CFDictionary)
+        if status == errSecMissingEntitlement, synchronizesCredentials {
+            let fallbackStatus = SecItemDelete(baseQuery(
+                sourceID: sourceID,
+                synchronizable: false
+            ) as CFDictionary)
+            guard fallbackStatus == errSecSuccess || fallbackStatus == errSecItemNotFound else {
+                throw KeychainCredentialStoreError.unexpectedStatus(fallbackStatus)
+            }
+            return
+        }
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainCredentialStoreError.unexpectedStatus(status)
         }
     }
 
-    private func baseQuery(sourceID: UUID) -> [String: Any] {
-        [
+    nonisolated func baseQuery(sourceID: UUID, synchronizable: Bool) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: sourceID.uuidString,
         ]
+        if synchronizable {
+            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
+        }
+        return query
     }
 
     private func validateService() throws {

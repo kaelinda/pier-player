@@ -7,7 +7,7 @@ import Testing
     @Test func saveLoadUpdateDeleteAndMissingCredential() async throws {
         let service = "app.pier-player.tests.\(UUID().uuidString)"
         let sourceID = UUID()
-        let store = KeychainCredentialStore(service: service)
+        let store = KeychainCredentialStore(service: service, synchronizesCredentials: false)
         defer { deleteAllKeychainItems(service: service) }
 
         #expect(try await store.load(sourceID: sourceID) == nil)
@@ -34,7 +34,7 @@ import Testing
         let service = "app.pier-player.tests.\(UUID().uuidString)"
         let firstID = UUID()
         let secondID = UUID()
-        let store = KeychainCredentialStore(service: service)
+        let store = KeychainCredentialStore(service: service, synchronizesCredentials: false)
         defer { deleteAllKeychainItems(service: service) }
 
         try await store.save(
@@ -57,7 +57,7 @@ import Testing
     @Test func secretPayloadContainsOnlyThePassword() async throws {
         let service = "app.pier-player.tests.\(UUID().uuidString)"
         let sourceID = UUID()
-        let store = KeychainCredentialStore(service: service)
+        let store = KeychainCredentialStore(service: service, synchronizesCredentials: false)
         defer { deleteAllKeychainItems(service: service) }
 
         let credential = try SMBCredential(
@@ -76,6 +76,13 @@ import Testing
         let metadata = try JSONDecoder().decode(KeychainCredentialMetadata.self, from: metadataData)
         #expect(metadata.username == "private-user")
         #expect(metadata.domain == "PRIVATE-DOMAIN")
+    }
+
+    @Test func productionQueriesRequestSynchronizableCredentials() {
+        let store = KeychainCredentialStore(service: "app.pier-player.tests")
+        let query = store.baseQuery(sourceID: UUID(), synchronizable: true)
+
+        #expect(query[kSecAttrSynchronizable as String] as? Bool == true)
     }
 }
 
