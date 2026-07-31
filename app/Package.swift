@@ -17,6 +17,7 @@ let package = Package(
         .library(name: "FFmpegKit", targets: ["FFmpegKit"]),
         .library(name: "RenderKit", targets: ["RenderKit"]),
         .library(name: "SubtitleKit", targets: ["SubtitleKit"]),
+        .library(name: "CloudSyncKit", targets: ["CloudSyncKit"]),
         .executable(name: "PierPlayerApp", targets: ["PierPlayerApp"]),
         .executable(name: "SMBProbe", targets: ["SMBProbe"]),
         .executable(name: "DiagnosticsReport", targets: ["DiagnosticsReport"]),
@@ -112,6 +113,14 @@ let package = Package(
             dependencies: ["MediaSourceKit"],
             path: "Shared/Sources/SubtitleKit"
         ),
+        .target(
+            name: "CloudSyncKit",
+            dependencies: ["MediaSourceKit"],
+            path: "Shared/Sources/CloudSyncKit",
+            linkerSettings: [
+                .linkedFramework("CloudKit"),
+            ]
+        ),
         .executableTarget(
             name: "PierPlayerApp",
             dependencies: [
@@ -199,6 +208,11 @@ let package = Package(
             name: "SubtitleKitTests",
             dependencies: ["SubtitleKit", "MediaSourceKit"],
             path: "Shared/Tests/SubtitleKitTests"
+        ),
+        .testTarget(
+            name: "CloudSyncKitTests",
+            dependencies: ["CloudSyncKit", "MediaSourceKit"],
+            path: "Shared/Tests/CloudSyncKitTests"
         ),
         .testTarget(
             name: "PierPlayerAppTests",
