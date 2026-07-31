@@ -144,6 +144,6 @@ Expected: no whitespace errors and no unrelated paths staged.
 
 Use focused Conventional Commits, fetch `origin`, merge current `origin/main` if needed, and rerun `cd app && scripts/check.sh` after integration.
 
-- [ ] **Step 5: Push and create a ready PR**
+- [x] **Step 5: Push and create a ready PR**
 
 Push `codex/source-management` and create a PR targeting `main` with scope, tradeoffs, screenshots, and verification commands.
