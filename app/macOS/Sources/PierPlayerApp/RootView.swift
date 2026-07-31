@@ -40,14 +40,14 @@ struct RootView: View {
                 EditSMBSourceView(model: model, details: details)
             }
         }
-        .onChange(of: model.sources.map(\.id), initial: true) { _, sourceIDs in
+        .onChange(of: model.configuredSources.map(\.id), initial: true) { _, sourceIDs in
             selectedDestination = destination.reconciled(with: sourceIDs)
         }
     }
 
     private var sourceSidebar: some View {
         RootSidebarContent(
-            sources: model.sources,
+            sources: model.configuredSources,
             isRestoring: model.isRestoring,
             selection: $selectedDestination,
             addSource: { isAddingSource = true },
@@ -73,11 +73,14 @@ struct RootView: View {
                 sourceID: sourceID,
                 sourceRevision: model.sourceRevision
             ))
-        case .source:
-            MediaLibraryView(
-                destination: destinationBinding,
-                addSource: { isAddingSource = true }
-            )
+        case let .source(sourceID):
+            ContentUnavailableView {
+                Label("Credentials Required", systemImage: "lock.fill")
+            } description: {
+                Text("Enter the SMB username and password for this device.")
+            } actions: {
+                Button("Reconnect") { editSource(sourceID) }
+            }
         }
     }
 
@@ -99,12 +102,12 @@ struct RootView: View {
     }
 
     private func showSourceInformation(_ id: UUID) {
-        guard let source = model.source(id: id) else { return }
+        guard let source = model.configuredSource(id: id) else { return }
         sourceManagementSheet = .information(SMBSourceDetails(source: source))
     }
 
     private func editSource(_ id: UUID) {
-        guard let source = model.source(id: id) else { return }
+        guard let source = model.configuredSource(id: id) else { return }
         sourceManagementSheet = .edit(SMBSourceDetails(source: source))
     }
 }
@@ -127,7 +130,7 @@ private struct SourceBrowserIdentity: Hashable {
 }
 
 struct RootSidebarContent: View {
-    let sources: [AppModel.ConnectedSource]
+    let sources: [AppModel.ConfiguredSource]
     let isRestoring: Bool
     @Binding var selection: SidebarDestination?
     let addSource: () -> Void
@@ -256,14 +259,16 @@ struct RootSidebarContent: View {
 }
 
 private struct SourceSidebarRow: View {
-    let source: AppModel.ConnectedSource
+    let source: AppModel.ConfiguredSource
 
     var body: some View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.teal.opacity(0.14))
-                Image(systemName: "externaldrive.connected.to.line.below")
+                Image(systemName: source.connectionState == .connected
+                    ? "externaldrive.connected.to.line.below"
+                    : "externaldrive.badge.person.crop")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.teal)
             }
@@ -278,6 +283,11 @@ private struct SourceSidebarRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if source.connectionState == .needsCredential {
+                    Text("Credentials Required")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .padding(.vertical, 3)

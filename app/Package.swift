@@ -133,6 +133,7 @@ let package = Package(
                 "RenderKit",
                 "SMBSourceKit",
                 "SubtitleKit",
+                "CloudSyncKit",
             ],
             path: "macOS/Sources/PierPlayerApp"
         ),

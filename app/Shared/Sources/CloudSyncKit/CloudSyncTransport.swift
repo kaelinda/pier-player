@@ -51,3 +51,8 @@ public protocol CloudSyncTransport: Sendable {
     func fetchSnapshot() async throws -> CloudSyncSnapshot
     func save(_ mutations: [CloudSyncMutation]) async throws
 }
+
+public protocol CloudSyncCoordinating: Sendable {
+    func enqueue(_ mutation: CloudSyncMutation) async
+    func synchronize(local: CloudSyncSnapshot) async -> CloudSyncSnapshot
+}

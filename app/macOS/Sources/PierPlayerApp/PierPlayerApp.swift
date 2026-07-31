@@ -1,4 +1,5 @@
 import AppKit
+import CloudSyncKit
 import DiagnosticsKit
 import PlaybackCore
 import SwiftUI
@@ -156,6 +157,9 @@ struct PierPlayerApp: App {
             operationID: UUID(),
             parentOperationID: runtime.context.operationID
         )
+        let syncCoordinator = (try? SyncStateStore()).map {
+            SyncCoordinator(transport: CloudKitSyncTransport(), stateStore: $0)
+        }
         _appModel = StateObject(wrappedValue: AppModel(
             playbackSession: PlaybackSession(
                 diagnosticRecorder: runtime.center.emitter,
@@ -163,7 +167,8 @@ struct PierPlayerApp: App {
             ),
             diagnosticRecorder: runtime.center.emitter,
             diagnosticContext: runtime.context,
-            identityProvider: runtime.identityProvider
+            identityProvider: runtime.identityProvider,
+            syncCoordinator: syncCoordinator
         ))
         _diagnosticsViewModel = StateObject(wrappedValue: DiagnosticsViewModel(
             client: LiveDiagnosticsCenterClient(center: runtime.center)
@@ -182,10 +187,14 @@ struct PierPlayerApp: App {
                     }
                     await diagnosticsRuntime.start()
                     await appModel.restore()
+                    await appModel.synchronizeSources()
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    guard phase != .active else { return }
-                    Task { await diagnosticsRuntime.flush() }
+                    if phase == .active {
+                        Task { await appModel.synchronizeSources() }
+                    } else {
+                        Task { await diagnosticsRuntime.flush() }
+                    }
                 }
         }
         .defaultSize(width: 1120, height: 720)

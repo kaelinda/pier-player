@@ -1,6 +1,6 @@
 import Foundation
 
-public actor SyncCoordinator {
+public actor SyncCoordinator: CloudSyncCoordinating {
     public private(set) var status: SyncStatus = .localOnly
 
     private let transport: any CloudSyncTransport

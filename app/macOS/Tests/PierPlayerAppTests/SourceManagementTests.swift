@@ -1,9 +1,65 @@
 import Foundation
+import CloudSyncKit
 import DiagnosticsKit
 import MediaSourceKit
 import SMBSourceKit
 import Testing
 @testable import PierPlayerApp
+
+@MainActor
+@Test func restoredSourceWithoutCredentialRemainsVisibleForReconnect() async throws {
+    let sourceStore = SourceManagementSourceStore()
+    let source = SMBStorageSource(
+        id: UUID(),
+        displayName: "Synced NAS",
+        host: "nas.local",
+        share: "Media"
+    )
+    await sourceStore.add(source)
+    let model = AppModel(
+        credentialStore: SourceManagementCredentialStore(),
+        sourceStore: sourceStore,
+        sourceFactory: SourceManagementSourceFactory().makeSource
+    )
+
+    await model.restore()
+
+    let configured = try #require(model.configuredSources.first)
+    #expect(configured.id == source.id)
+    #expect(configured.connectionState == .needsCredential)
+    #expect(model.source(id: source.id) == nil)
+}
+
+@MainActor
+@Test func sourceAddQueuesCloudSyncAfterLocalCommit() async throws {
+    let coordinator = RecordingSyncCoordinator()
+    let factory = SourceManagementSourceFactory()
+    let model = AppModel(
+        credentialStore: SourceManagementCredentialStore(),
+        sourceStore: SourceManagementSourceStore(),
+        sourceFactory: factory.makeSource,
+        syncCoordinator: coordinator
+    )
+
+    try await model.addSMBSource(
+        displayName: "Synced NAS",
+        host: "nas.local",
+        share: "Media",
+        username: "viewer",
+        password: "private-secret",
+        domain: nil,
+        requiresEncryption: true
+    )
+
+    let mutation = try #require(await coordinator.mutations.first)
+    guard case let .upsertSource(source) = mutation else {
+        Issue.record("Expected a source upsert")
+        return
+    }
+    #expect(source.displayName == "Synced NAS")
+    #expect(source.host == "nas.local")
+    #expect(source.share == "Media")
+}
 @testable import SMBSourceKit
 
 @MainActor
@@ -360,6 +416,18 @@ private actor SourceManagementCredentialStore: SMBCredentialStore {
     func failSave(afterSuccessfulSaves count: Int, failureCount: Int) {
         successfulSavesBeforeFailure = count
         remainingSaveFailures = failureCount
+    }
+}
+
+private actor RecordingSyncCoordinator: CloudSyncCoordinating {
+    private(set) var mutations: [CloudSyncMutation] = []
+
+    func enqueue(_ mutation: CloudSyncMutation) {
+        mutations.append(mutation)
+    }
+
+    func synchronize(local: CloudSyncSnapshot) -> CloudSyncSnapshot {
+        local
     }
 }
 

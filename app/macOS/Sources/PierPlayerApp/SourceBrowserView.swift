@@ -65,7 +65,7 @@ struct SourceBrowserView: View {
             .frame(width: 34, height: 34)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.source(id: sourceID)?.displayName ?? "Network Source")
+                Text(model.configuredSource(id: sourceID)?.displayName ?? "Network Source")
                     .font(.headline)
                     .lineLimit(1)
                 Text(displayPath)

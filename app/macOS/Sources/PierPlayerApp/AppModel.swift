@@ -1,3 +1,4 @@
+import CloudSyncKit
 import DiagnosticsKit
 import MediaSourceKit
 import PlaybackCore
@@ -30,8 +31,23 @@ final class AppModel: ObservableObject {
         let configuration: SMBConnectionConfiguration
     }
 
+    enum SourceConnectionState: Equatable {
+        case connected
+        case needsCredential
+        case unavailable
+    }
+
+    struct ConfiguredSource: Identifiable {
+        let id: UUID
+        let displayName: String
+        let username: String?
+        let configuration: SMBConnectionConfiguration
+        let connectionState: SourceConnectionState
+    }
+
     @Published private(set) var snapshot: PlaybackSnapshot = .idle
     @Published private(set) var sources: [ConnectedSource] = []
+    @Published private(set) var configuredSources: [ConfiguredSource] = []
     @Published private(set) var isRestoring = true
     @Published private(set) var sourceRevision = 0
 
@@ -42,6 +58,7 @@ final class AppModel: ObservableObject {
     private let diagnosticContext: DiagnosticContext
     private let identityProvider: (any DiagnosticIdentityProviding)?
     private let sourceFactory: SourceFactory?
+    private let syncCoordinator: (any CloudSyncCoordinating)?
 
     init(
         playbackSession: PlaybackSession = PlaybackSession(),
@@ -50,7 +67,8 @@ final class AppModel: ObservableObject {
         diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
         diagnosticContext: DiagnosticContext? = nil,
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
-        sourceFactory: SourceFactory? = nil
+        sourceFactory: SourceFactory? = nil,
+        syncCoordinator: (any CloudSyncCoordinating)? = nil
     ) {
         self.playbackSession = playbackSession
         self.credentialStore = credentialStore
@@ -65,6 +83,7 @@ final class AppModel: ObservableObject {
         )
         self.identityProvider = identityProvider
         self.sourceFactory = sourceFactory
+        self.syncCoordinator = syncCoordinator
     }
 
     func restore() async {
@@ -90,6 +109,14 @@ final class AppModel: ObservableObject {
             return
         }
 
+        await restore(storedSources, operation: operation)
+        operation.end(outcome: .success)
+    }
+
+    private func restore(
+        _ storedSources: [SMBStorageSource],
+        operation: DiagnosticOperation
+    ) async {
         for stored in storedSources {
             let restoreOperation = DiagnosticOperation(
                 recorder: diagnosticRecorder,
@@ -99,12 +126,25 @@ final class AppModel: ObservableObject {
                 persistence: .essential
             )
             do {
-                try await restoreSource(stored, context: restoreOperation.context)
+                let configuration = try configuration(from: stored)
+                configuredSources.append(ConfiguredSource(
+                    id: configuration.sourceID,
+                    displayName: configuration.displayName,
+                    username: nil,
+                    configuration: configuration,
+                    connectionState: .needsCredential
+                ))
+                try await restoreSource(
+                    stored,
+                    configuration: configuration,
+                    context: restoreOperation.context
+                )
                 restoreOperation.end(
                     outcome: .success,
                     payload: DiagnosticPayload(sourceID: stored.id)
                 )
             } catch {
+                updateConfiguredState(id: stored.id, state: .unavailable)
                 finishAppSourceOperation(
                     restoreOperation,
                     error: error,
@@ -112,25 +152,18 @@ final class AppModel: ObservableObject {
                 )
             }
         }
-        operation.end(outcome: .success)
     }
 
     private func restoreSource(
         _ stored: SMBStorageSource,
+        configuration: SMBConnectionConfiguration,
         context: DiagnosticContext
     ) async throws {
         guard let storedCredential = try await credentialStore.load(sourceID: stored.id) else {
-            throw MediaSourceError.notConnected
+            updateConfiguredState(id: stored.id, state: .needsCredential)
+            return
         }
         let credential = storedCredential.credential
-        let configuration = try SMBConnectionConfiguration(
-            sourceID: stored.id,
-            displayName: stored.displayName,
-            host: stored.host,
-            share: stored.share,
-            domain: stored.domain,
-            requiresEncryption: stored.requiresEncryption
-        )
         let source = makeSource(
             configuration: configuration,
             credential: credential,
@@ -144,6 +177,37 @@ final class AppModel: ObservableObject {
             source: source,
             configuration: configuration
         ))
+        updateConfiguredState(
+            id: stored.id,
+            username: credential.username,
+            state: .connected
+        )
+    }
+
+    func synchronizeSources() async {
+        guard let syncCoordinator,
+              let stored = try? await sourceStore.load() else { return }
+        let local = CloudSyncSnapshot(
+            sources: stored.map(\.syncedSource),
+            progress: []
+        )
+        let merged = await syncCoordinator.synchronize(local: local)
+        let mergedStorage = merged.sources.map(\.storageSource)
+        guard mergedStorage != stored else { return }
+
+        try? await sourceStore.replaceAll(mergedStorage)
+        for connected in sources { await connected.source.disconnect() }
+        sources.removeAll()
+        configuredSources.removeAll()
+        let operation = DiagnosticOperation(
+            recorder: diagnosticRecorder,
+            parentContext: diagnosticContext,
+            name: .sourceRestore,
+            persistence: .essential
+        )
+        await restore(mergedStorage, operation: operation)
+        operation.end(outcome: .success)
+        sourceRevision &+= 1
     }
 
     var phaseLabel: String {
@@ -190,7 +254,8 @@ final class AppModel: ObservableObject {
                 credential: credential,
                 domain: configuration.domain
             )
-            try await sourceStore.add(SMBStorageSource.from(configuration: configuration))
+            let storedSource = SMBStorageSource.from(configuration: configuration)
+            try await sourceStore.add(storedSource)
             sources.append(ConnectedSource(
                 id: configuration.sourceID,
                 displayName: configuration.displayName,
@@ -198,6 +263,14 @@ final class AppModel: ObservableObject {
                 source: source,
                 configuration: configuration
             ))
+            configuredSources.append(ConfiguredSource(
+                id: configuration.sourceID,
+                displayName: configuration.displayName,
+                username: credential.username,
+                configuration: configuration,
+                connectionState: .connected
+            ))
+            await syncCoordinator?.enqueue(.upsertSource(storedSource.syncedSource))
             sourceRevision &+= 1
         } catch {
             await source.disconnect()
@@ -215,8 +288,21 @@ final class AppModel: ObservableObject {
         domain: String?,
         requiresEncryption: Bool
     ) async throws {
-        guard let sourceIndex = sources.firstIndex(where: { $0.id == id }) else {
+        guard configuredSources.contains(where: { $0.id == id }) else {
             throw SMBSourceStoreError.sourceNotFound(id)
+        }
+        guard let sourceIndex = sources.firstIndex(where: { $0.id == id }) else {
+            try await reconnectSMBSource(
+                id: id,
+                displayName: displayName,
+                host: host,
+                share: share,
+                username: username,
+                replacementPassword: replacementPassword,
+                domain: domain,
+                requiresEncryption: requiresEncryption
+            )
+            return
         }
 
         let storedSources = try await sourceStore.load()
@@ -249,10 +335,9 @@ final class AppModel: ObservableObject {
             throw error
         }
 
+        let updatedStorage = SMBStorageSource.from(configuration: configuration)
         do {
-            try await sourceStore.update(SMBStorageSource.from(
-                configuration: configuration
-            ))
+            try await sourceStore.update(updatedStorage)
         } catch {
             await replacementSource.disconnect()
             throw SMBSourceUpdateError.changesNotSaved
@@ -284,21 +369,107 @@ final class AppModel: ObservableObject {
             configuration: configuration
         )
         sourceRevision &+= 1
+        replaceConfigured(
+            configuration: configuration,
+            username: credential.username,
+            state: .connected
+        )
+        await syncCoordinator?.enqueue(.upsertSource(updatedStorage.syncedSource))
         await previousSource.disconnect()
     }
 
+    private func reconnectSMBSource(
+        id: UUID,
+        displayName: String,
+        host: String,
+        share: String,
+        username: String,
+        replacementPassword: String?,
+        domain: String?,
+        requiresEncryption: Bool
+    ) async throws {
+        let storedSources = try await sourceStore.load()
+        guard let previousStorage = storedSources.first(where: { $0.id == id }) else {
+            throw SMBSourceStoreError.sourceNotFound(id)
+        }
+        let existingCredential = try await credentialStore.load(sourceID: id)
+        guard let password = replacementPassword ?? existingCredential?.credential.password else {
+            throw MediaSourceError.authenticationFailed
+        }
+        let configuration = try SMBConnectionConfiguration(
+            sourceID: id,
+            displayName: displayName,
+            host: host,
+            share: share,
+            domain: domain,
+            requiresEncryption: requiresEncryption
+        )
+        let credential = try SMBCredential(username: username, password: password)
+        let source = makeSource(
+            configuration: configuration,
+            credential: credential,
+            context: diagnosticContext
+        )
+        do {
+            try await source.connect()
+        } catch {
+            await source.disconnect()
+            throw error
+        }
+
+        let updatedStorage = SMBStorageSource.from(configuration: configuration)
+        do {
+            try await sourceStore.update(updatedStorage)
+            do {
+                try await credentialStore.save(
+                    sourceID: id,
+                    credential: credential,
+                    domain: configuration.domain
+                )
+            } catch {
+                try? await sourceStore.update(previousStorage)
+                throw error
+            }
+        } catch {
+            await source.disconnect()
+            throw error
+        }
+
+        sources.append(ConnectedSource(
+            id: id,
+            displayName: configuration.displayName,
+            username: credential.username,
+            source: source,
+            configuration: configuration
+        ))
+        replaceConfigured(
+            configuration: configuration,
+            username: credential.username,
+            state: .connected
+        )
+        sourceRevision &+= 1
+        await syncCoordinator?.enqueue(.upsertSource(updatedStorage.syncedSource))
+    }
+
     func removeSource(id: UUID) async {
-        guard let index = sources.firstIndex(where: { $0.id == id }) else { return }
-        let source = sources[index]
-        await source.source.disconnect()
+        guard configuredSources.contains(where: { $0.id == id }) else { return }
+        if let index = sources.firstIndex(where: { $0.id == id }) {
+            let source = sources.remove(at: index)
+            await source.source.disconnect()
+        }
         try? await credentialStore.delete(sourceID: id)
         try? await sourceStore.remove(id: id)
-        sources.remove(at: index)
+        configuredSources.removeAll { $0.id == id }
+        await syncCoordinator?.enqueue(.deleteSource(id: id, modifiedAt: Date()))
         sourceRevision &+= 1
     }
 
     func source(id: UUID?) -> ConnectedSource? {
         sources.first { $0.id == id }
+    }
+
+    func configuredSource(id: UUID?) -> ConfiguredSource? {
+        configuredSources.first { $0.id == id }
     }
 
     func makePlaybackDiagnosticDependencies() -> PlaybackDiagnosticDependencies {
@@ -374,6 +545,48 @@ final class AppModel: ObservableObject {
         )
     }
 
+    private func configuration(from stored: SMBStorageSource) throws -> SMBConnectionConfiguration {
+        try SMBConnectionConfiguration(
+            sourceID: stored.id,
+            displayName: stored.displayName,
+            host: stored.host,
+            share: stored.share,
+            domain: stored.domain,
+            requiresEncryption: stored.requiresEncryption
+        )
+    }
+
+    private func updateConfiguredState(
+        id: UUID,
+        username: String? = nil,
+        state: SourceConnectionState
+    ) {
+        guard let index = configuredSources.firstIndex(where: { $0.id == id }) else { return }
+        let current = configuredSources[index]
+        configuredSources[index] = ConfiguredSource(
+            id: current.id,
+            displayName: current.displayName,
+            username: username ?? current.username,
+            configuration: current.configuration,
+            connectionState: state
+        )
+    }
+
+    private func replaceConfigured(
+        configuration: SMBConnectionConfiguration,
+        username: String?,
+        state: SourceConnectionState
+    ) {
+        configuredSources.removeAll { $0.id == configuration.sourceID }
+        configuredSources.append(ConfiguredSource(
+            id: configuration.sourceID,
+            displayName: configuration.displayName,
+            username: username,
+            configuration: configuration,
+            connectionState: state
+        ))
+    }
+
     static func connectionErrorMessage(for error: Error) -> String {
         switch error {
         case SMBConfigurationError.emptyDisplayName:
@@ -405,6 +618,34 @@ final class AppModel: ObservableObject {
         default:
             "The SMB source could not be connected."
         }
+    }
+}
+
+private extension SMBStorageSource {
+    var syncedSource: SyncedSMBSource {
+        SyncedSMBSource(
+            id: id,
+            displayName: displayName,
+            host: host,
+            share: share,
+            domain: domain,
+            requiresEncryption: requiresEncryption,
+            modifiedAt: modifiedAt
+        )
+    }
+}
+
+private extension SyncedSMBSource {
+    var storageSource: SMBStorageSource {
+        SMBStorageSource(
+            id: id,
+            displayName: displayName,
+            host: host,
+            share: share,
+            domain: domain,
+            requiresEncryption: requiresEncryption,
+            modifiedAt: modifiedAt
+        )
     }
 }
 

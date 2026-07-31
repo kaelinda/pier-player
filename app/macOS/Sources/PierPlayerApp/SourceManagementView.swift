@@ -54,6 +54,18 @@ struct SMBSourceDetails: Equatable, Identifiable {
         )
     }
 
+    init(source: AppModel.ConfiguredSource) {
+        self.init(
+            id: source.id,
+            displayName: source.displayName,
+            host: source.configuration.host,
+            share: source.configuration.share,
+            username: source.username ?? "",
+            domain: source.configuration.domain,
+            requiresEncryption: source.configuration.requiresEncryption
+        )
+    }
+
     var address: String {
         "smb://\(host)/\(share)"
     }
@@ -156,7 +168,10 @@ struct SourceInformationView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-                LabeledContent("Username", value: details.username)
+                LabeledContent(
+                    "Username",
+                    value: details.username.isEmpty ? "Credentials Required" : details.username
+                )
                 LabeledContent("Domain", value: details.domainText)
                 LabeledContent("Encryption", value: details.encryptionText)
                 LabeledContent("Source ID") {
