@@ -73,6 +73,32 @@ import Testing
     #expect(await fixture.transport.fetchCount == 0)
 }
 
+@Test func remoteTombstoneRemovesCleanLocalSource() async throws {
+    let fixture = try SyncFixture()
+    defer { fixture.cleanup() }
+    let id = UUID()
+    let local = source(id: id, name: "Removed Elsewhere", modifiedAt: 10)
+    let tombstone = SyncedSMBSource(
+        id: id,
+        displayName: "",
+        host: "",
+        share: "",
+        domain: nil,
+        requiresEncryption: false,
+        modifiedAt: Date(timeIntervalSince1970: 20),
+        isDeleted: true
+    )
+    await fixture.transport.setSnapshot(
+        CloudSyncSnapshot(sources: [tombstone], progress: [])
+    )
+
+    let result = await fixture.coordinator.synchronize(
+        local: CloudSyncSnapshot(sources: [local], progress: [])
+    )
+
+    #expect(result.sources.isEmpty)
+}
+
 private struct SyncFixture {
     let directory: URL
     let fileURL: URL

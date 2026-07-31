@@ -82,6 +82,18 @@ That duplicate plaintext storage must be removed before the application is
 considered safe for general use or distribution. Logs and bug reports must also
 redact SMB hosts, paths, usernames, and passwords.
 
+## iCloud Sync Setup
+
+Source configuration and opaque playback progress can use the user's private
+CloudKit database. SMB credentials use iCloud Keychain and are never written to
+CloudKit. The app remains local-only when iCloud is unavailable.
+
+Live cross-device sync requires a signed Xcode app build with bundle identifier
+`dev.pierplayer.app`, the checked-in `app/macOS/PierPlayerApp.entitlements`, and
+CloudKit container `iCloud.dev.pierplayer.app` enabled in the Apple Developer
+account. `swift run PierPlayerApp` does not provide those production signing
+capabilities and therefore cannot prove live CloudKit synchronization.
+
 ## Local Diagnostics
 
 Open **Settings > Diagnostics** to inspect local diagnostic status and recent

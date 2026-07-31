@@ -85,9 +85,14 @@ public actor SyncCoordinator {
             }
             progress[value.mediaID] = value
         }
+        let deletedSourceIDs = Set(sources.values.filter(\.isDeleted).map(\.id))
         return CloudSyncSnapshot(
-            sources: sources.values.sorted { $0.id.uuidString < $1.id.uuidString },
-            progress: progress.values.sorted { $0.mediaID < $1.mediaID }
+            sources: sources.values
+                .filter { !$0.isDeleted }
+                .sorted { $0.id.uuidString < $1.id.uuidString },
+            progress: progress.values
+                .filter { !deletedSourceIDs.contains($0.sourceID) }
+                .sorted { $0.mediaID < $1.mediaID }
         )
     }
 
@@ -109,7 +114,9 @@ public actor SyncCoordinator {
             }
         }
         return CloudSyncSnapshot(
-            sources: sources.values.sorted { $0.id.uuidString < $1.id.uuidString },
+            sources: sources.values
+                .filter { !$0.isDeleted }
+                .sorted { $0.id.uuidString < $1.id.uuidString },
             progress: progress.values.sorted { $0.mediaID < $1.mediaID }
         )
     }
