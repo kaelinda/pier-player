@@ -30,7 +30,7 @@ Expected: failure because `SMBSourceStore.update` and the isolated store initial
 
 Add `SMBSourceStoreError.sourceNotFound`, an internal `init(fileURL:)`, and `update(_:)` that replaces the matching item at its existing index.
 
-- [ ] **Step 4: Verify the focused store tests pass**
+- [x] **Step 4: Verify the focused store tests pass**
 
 Run: `cd app && swift test --filter SMBSourceStoreTests`
 
@@ -53,15 +53,15 @@ Run: `cd app && swift test --filter sourceManagementPresentsCompleteActionsAndSa
 
 Expected: compile failure because the presentation types and views do not exist.
 
-- [ ] **Step 3: Implement presentation models and shared form**
+- [x] **Step 3: Implement presentation models and shared form**
 
 Add `SourceManagementAction`, `SMBSourceDetails`, and `SMBSourceFormDraft`. Extract the grouped source, credentials, security, and inline error sections into a shared form used by add and edit sheets.
 
-- [ ] **Step 4: Implement information and edit sheets**
+- [x] **Step 4: Implement information and edit sheets**
 
 Build native header, grouped content, keyboard actions, loading state, validation, inline errors, accessibility labels, and fixed 520 point sheet widths.
 
-- [ ] **Step 5: Verify focused rendering tests pass**
+- [x] **Step 5: Verify focused rendering tests pass**
 
 Run: `cd app && PIER_WRITE_SNAPSHOTS=1 swift test --filter 'sourceInformationSheetRendersAtDesignedSize|editSourceSheetRendersAtDesignedSize'`
 
@@ -83,15 +83,15 @@ Run: `cd app && swift test --filter 'editingSourcePreservesPasswordAndReplacesTh
 
 Expected: compile failure because model injection, username, revision, and update APIs do not exist.
 
-- [ ] **Step 3: Add source construction injection and revision state**
+- [x] **Step 3: Add source construction injection and revision state**
 
 Change `ConnectedSource.source` to `any MediaSource`, retain its username, route live and fake construction through one factory, and increment `sourceRevision` after add, update, and remove.
 
-- [ ] **Step 4: Implement safe update sequencing**
+- [x] **Step 4: Implement safe update sequencing**
 
 Load the previous password, validate inputs, connect the replacement, persist credential and metadata with rollback, replace the connected source in place, then disconnect the previous source.
 
-- [ ] **Step 5: Verify model tests pass**
+- [x] **Step 5: Verify model tests pass**
 
 Run: `cd app && swift test --filter 'editingSourcePreservesPasswordAndReplacesTheLiveConnection|failedSourceEditKeepsTheExistingConnectionAndConfiguration'`
 
@@ -105,15 +105,15 @@ Expected: both tests pass.
 - Modify: `app/macOS/Sources/PierPlayerApp/MediaLibraryView.swift`
 - Modify: `app/macOS/Tests/PierPlayerAppTests/UIRenderingTests.swift`
 
-- [ ] **Step 1: Add sheet routing and context commands**
+- [x] **Step 1: Add sheet routing and context commands**
 
 Pass information and edit callbacks into `RootSidebarContent`, render native labels and icons, and route the selected source details to the matching sheet.
 
-- [ ] **Step 2: Invalidate source-dependent views**
+- [x] **Step 2: Invalidate source-dependent views**
 
 Include `sourceRevision` in the source browser identity and media-library reload request while preserving the source UUID selection.
 
-- [ ] **Step 3: Run focused app tests**
+- [x] **Step 3: Run focused app tests**
 
 Run: `cd app && swift test --filter PierPlayerAppTests`
 
@@ -124,17 +124,17 @@ Expected: all app tests pass.
 **Files:**
 - Verify all changed files and generated snapshots.
 
-- [ ] **Step 1: Run the project quality gate**
+- [x] **Step 1: Run the project quality gate**
 
 Run: `cd app && scripts/check.sh`
 
 Expected: all tests pass, the Release build succeeds, and whitespace checks are clean.
 
-- [ ] **Step 2: Inspect both sheets and the context menu**
+- [x] **Step 2: Inspect both sheets and the context menu**
 
 Launch `swift run PierPlayerApp`, confirm menu order, edit progress/error behavior, full content visibility, dark-mode contrast, and no password disclosure.
 
-- [ ] **Step 3: Review the final diff**
+- [x] **Step 3: Review the final diff**
 
 Run: `git diff --check && git status --short && git diff --stat`
 

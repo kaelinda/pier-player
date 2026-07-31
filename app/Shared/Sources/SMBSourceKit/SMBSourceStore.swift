@@ -1,5 +1,16 @@
 import Foundation
 
+public enum SMBSourceStoreError: Error, Equatable, Sendable {
+    case sourceNotFound(UUID)
+}
+
+public protocol SMBSourceStoring: Sendable {
+    func load() async throws -> [SMBStorageSource]
+    func add(_ source: SMBStorageSource) async throws
+    func update(_ source: SMBStorageSource) async throws
+    func remove(id: UUID) async throws
+}
+
 /// Persisted SMB source configuration (including credentials for simplicity).
 public struct SMBStorageSource: Codable, Hashable, Identifiable, Sendable {
     public let id: UUID
@@ -80,6 +91,12 @@ public actor SMBSourceStore {
         self.fileURL = URL(fileURLWithPath: "/dev/null")
     }
 
+    init(fileURL: URL) {
+        self.encoder = JSONEncoder()
+        self.decoder = JSONDecoder()
+        self.fileURL = fileURL
+    }
+
     /// Loads all stored source configurations, skipping entries that fail to decode.
     public func load() throws -> [SMBStorageSource] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
@@ -103,6 +120,16 @@ public actor SMBSourceStore {
         try save(sources)
     }
 
+    /// Replaces an existing source configuration without changing its list position.
+    public func update(_ source: SMBStorageSource) throws {
+        var sources = try load()
+        guard let index = sources.firstIndex(where: { $0.id == source.id }) else {
+            throw SMBSourceStoreError.sourceNotFound(source.id)
+        }
+        sources[index] = source
+        try save(sources)
+    }
+
     /// Removes a source configuration by ID.
     public func remove(id: UUID) throws {
         var sources = (try? load()) ?? []
@@ -110,3 +137,5 @@ public actor SMBSourceStore {
         try save(sources)
     }
 }
+
+extension SMBSourceStore: SMBSourceStoring {}

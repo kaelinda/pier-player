@@ -19,6 +19,7 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isAddingSource = false
     @State private var selectedDestination: SidebarDestination? = .library
+    @State private var sourceManagementSheet: SourceManagementSheet?
 
     var body: some View {
         NavigationSplitView {
@@ -31,6 +32,14 @@ struct RootView: View {
         .sheet(isPresented: $isAddingSource) {
             AddSMBSourceView(model: model)
         }
+        .sheet(item: $sourceManagementSheet) { sheet in
+            switch sheet {
+            case let .information(details):
+                SourceInformationView(details: details)
+            case let .edit(details):
+                EditSMBSourceView(model: model, details: details)
+            }
+        }
         .onChange(of: model.sources.map(\.id), initial: true) { _, sourceIDs in
             selectedDestination = destination.reconciled(with: sourceIDs)
         }
@@ -42,6 +51,8 @@ struct RootView: View {
             isRestoring: model.isRestoring,
             selection: $selectedDestination,
             addSource: { isAddingSource = true },
+            showSourceInformation: showSourceInformation,
+            editSource: editSource,
             removeSource: removeSource
         )
     }
@@ -58,7 +69,10 @@ struct RootView: View {
             NavigationStack {
                 SourceBrowserView(sourceID: sourceID, path: "/")
             }
-            .id(sourceID)
+            .id(SourceBrowserIdentity(
+                sourceID: sourceID,
+                sourceRevision: model.sourceRevision
+            ))
         case .source:
             MediaLibraryView(
                 destination: destinationBinding,
@@ -83,6 +97,33 @@ struct RootView: View {
             await model.removeSource(id: id)
         }
     }
+
+    private func showSourceInformation(_ id: UUID) {
+        guard let source = model.source(id: id) else { return }
+        sourceManagementSheet = .information(SMBSourceDetails(source: source))
+    }
+
+    private func editSource(_ id: UUID) {
+        guard let source = model.source(id: id) else { return }
+        sourceManagementSheet = .edit(SMBSourceDetails(source: source))
+    }
+}
+
+private enum SourceManagementSheet: Identifiable {
+    case information(SMBSourceDetails)
+    case edit(SMBSourceDetails)
+
+    var id: String {
+        switch self {
+        case let .information(details): "information-\(details.id)"
+        case let .edit(details): "edit-\(details.id)"
+        }
+    }
+}
+
+private struct SourceBrowserIdentity: Hashable {
+    let sourceID: UUID
+    let sourceRevision: Int
 }
 
 struct RootSidebarContent: View {
@@ -90,6 +131,8 @@ struct RootSidebarContent: View {
     let isRestoring: Bool
     @Binding var selection: SidebarDestination?
     let addSource: () -> Void
+    let showSourceInformation: (UUID) -> Void
+    let editSource: (UUID) -> Void
     let removeSource: (UUID) -> Void
 
     var body: some View {
@@ -109,10 +152,33 @@ struct RootSidebarContent: View {
                         SourceSidebarRow(source: source)
                             .tag(SidebarDestination.source(source.id))
                             .contextMenu {
+                                Button {
+                                    showSourceInformation(source.id)
+                                } label: {
+                                    Label(
+                                        SourceManagementAction.information.title,
+                                        systemImage: "info.circle"
+                                    )
+                                }
+
+                                Button {
+                                    editSource(source.id)
+                                } label: {
+                                    Label(
+                                        SourceManagementAction.edit.title,
+                                        systemImage: "pencil"
+                                    )
+                                }
+
+                                Divider()
+
                                 Button(role: .destructive) {
                                     removeSource(source.id)
                                 } label: {
-                                    Label("Remove Source", systemImage: "trash")
+                                    Label(
+                                        SourceManagementAction.remove.title,
+                                        systemImage: "trash"
+                                    )
                                 }
                             }
                     }

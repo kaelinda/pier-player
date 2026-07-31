@@ -177,6 +177,7 @@ struct MediaLibraryView: View {
     private var reloadRequest: MediaLibraryReloadRequest {
         MediaLibraryReloadRequest(
             sourceIDs: model.sources.map(\.id),
+            sourceRevision: model.sourceRevision,
             generation: refreshGeneration
         )
     }
@@ -451,6 +452,7 @@ struct MediaLibraryContentView: View {
 
 private struct MediaLibraryReloadRequest: Hashable {
     let sourceIDs: [UUID]
+    let sourceRevision: Int
     let generation: Int
 }
 

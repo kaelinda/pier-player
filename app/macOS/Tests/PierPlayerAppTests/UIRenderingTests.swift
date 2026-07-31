@@ -19,6 +19,37 @@ import Testing
     #expect(SidebarDestination.library.reconciled(with: [existingID]) == .library)
 }
 
+@Test func sourceManagementPresentsCompleteActionsAndSafeEditDefaults() {
+    #expect(SourceManagementAction.allCases.map(\.title) == [
+        "Get Info",
+        "Edit Source",
+        "Remove Source",
+    ])
+
+    let details = sourceManagementDetailsFixture()
+    #expect(details.address == "smb://nas.local/Media")
+    #expect(details.domainText == "WORKGROUP")
+    #expect(details.encryptionText == "Required")
+
+    var draft = SMBSourceFormDraft(details: details)
+    #expect(draft.displayName == "Home NAS")
+    #expect(draft.username == "viewer")
+    #expect(draft.password.isEmpty)
+    #expect(draft.replacementPassword == nil)
+    #expect(draft.canSubmit)
+
+    draft.password = "replacement"
+    #expect(draft.replacementPassword == "replacement")
+
+    let idleInteraction = SourceEditInteractionState(isSaving: false)
+    #expect(idleInteraction.allowsDismissal)
+    #expect(idleInteraction.allowsEditing)
+
+    let savingInteraction = SourceEditInteractionState(isSaving: true)
+    #expect(!savingInteraction.allowsDismissal)
+    #expect(!savingInteraction.allowsEditing)
+}
+
 @Test func mediaLibraryStatePrioritizesRestorationAndPreservesExistingContent() {
     let restoringEmpty = MediaLibraryContentState.resolve(
         sourceCount: 1,
@@ -152,6 +183,8 @@ import Testing
             isRestoring: true,
             selection: .constant(.library),
             addSource: {},
+            showSourceInformation: { _ in },
+            editSource: { _ in },
             removeSource: { _ in }
         )
         .preferredColorScheme(.dark)
@@ -166,6 +199,39 @@ import Testing
     #expect(distinctSampledColorCount(in: image) > 8)
     #expect(darkPixelFraction(in: image) > 0.6)
     try writeSnapshotIfRequested(image, name: "root-sidebar")
+}
+
+@MainActor
+@Test func sourceInformationSheetRendersAtDesignedSize() throws {
+    let size = CGSize(width: 520, height: 430)
+    let image = try render(
+        SourceInformationView(details: sourceManagementDetailsFixture())
+            .tint(.teal)
+            .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    try writeSnapshotIfRequested(image, name: "source-information-sheet")
+}
+
+@MainActor
+@Test func editSourceSheetRendersAtDesignedSize() throws {
+    let size = CGSize(width: 520, height: 590)
+    let image = try render(
+        EditSMBSourceView(
+            model: AppModel(),
+            details: sourceManagementDetailsFixture()
+        )
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    try writeSnapshotIfRequested(image, name: "edit-source-sheet")
 }
 
 @MainActor
@@ -491,6 +557,18 @@ private func mediaLibraryFixture() -> (
             ]
         ),
         sources
+    )
+}
+
+private func sourceManagementDetailsFixture() -> SMBSourceDetails {
+    SMBSourceDetails(
+        id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
+        displayName: "Home NAS",
+        host: "nas.local",
+        share: "Media",
+        username: "viewer",
+        domain: "WORKGROUP",
+        requiresEncryption: true
     )
 }
 
