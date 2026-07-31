@@ -4,8 +4,18 @@ import PlaybackCore
 import SMBSourceKit
 import SwiftUI
 
+enum SMBSourceUpdateError: Error, Equatable {
+    case changesNotSaved
+    case credentialRollbackFailed
+}
+
 @MainActor
 final class AppModel: ObservableObject {
+    typealias SourceFactory = (
+        _ configuration: SMBConnectionConfiguration,
+        _ credential: SMBCredential
+    ) -> any MediaSource
+
     struct PlaybackDiagnosticDependencies {
         let recorder: any DiagnosticRecording
         let context: DiagnosticContext
@@ -15,28 +25,32 @@ final class AppModel: ObservableObject {
     struct ConnectedSource: Identifiable {
         let id: UUID
         let displayName: String
-        let source: SMBMediaSource
+        let username: String
+        let source: any MediaSource
         let configuration: SMBConnectionConfiguration
     }
 
     @Published private(set) var snapshot: PlaybackSnapshot = .idle
     @Published private(set) var sources: [ConnectedSource] = []
     @Published private(set) var isRestoring = true
+    @Published private(set) var sourceRevision = 0
 
     let playbackSession: PlaybackSession
     private let credentialStore: any SMBCredentialStore
-    private let sourceStore: SMBSourceStore
+    private let sourceStore: any SMBSourceStoring
     private let diagnosticRecorder: any DiagnosticRecording
     private let diagnosticContext: DiagnosticContext
     private let identityProvider: (any DiagnosticIdentityProviding)?
+    private let sourceFactory: SourceFactory?
 
     init(
         playbackSession: PlaybackSession = PlaybackSession(),
         credentialStore: any SMBCredentialStore = KeychainCredentialStore(),
-        sourceStore: SMBSourceStore? = nil,
+        sourceStore: (any SMBSourceStoring)? = nil,
         diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
         diagnosticContext: DiagnosticContext? = nil,
-        identityProvider: (any DiagnosticIdentityProviding)? = nil
+        identityProvider: (any DiagnosticIdentityProviding)? = nil,
+        sourceFactory: SourceFactory? = nil
     ) {
         self.playbackSession = playbackSession
         self.credentialStore = credentialStore
@@ -50,6 +64,7 @@ final class AppModel: ObservableObject {
             operationID: UUID()
         )
         self.identityProvider = identityProvider
+        self.sourceFactory = sourceFactory
     }
 
     func restore() async {
@@ -104,6 +119,28 @@ final class AppModel: ObservableObject {
         context: DiagnosticContext
     ) async throws {
         let credential = try SMBCredential(username: stored.username, password: stored.password)
+        do {
+            try await credentialStore.save(
+                sourceID: stored.id,
+                credential: credential,
+                domain: stored.domain
+            )
+        } catch {
+            diagnosticRecorder.record(.instant(
+                level: .warning,
+                name: .sourceRestore,
+                context: context,
+                outcome: .failure,
+                payload: DiagnosticPayload(
+                    sourceID: stored.id,
+                    error: DiagnosticErrorDescriptor(
+                        code: .diagnosticsStorageFailed,
+                        isRetryable: true
+                    )
+                ),
+                persistence: .essential
+            ))
+        }
         let configuration = try SMBConnectionConfiguration(
             sourceID: stored.id,
             displayName: stored.displayName,
@@ -112,24 +149,16 @@ final class AppModel: ObservableObject {
             domain: stored.domain,
             requiresEncryption: stored.requiresEncryption
         )
-        let client = LibSMB2Client(
+        let source = makeSource(
             configuration: configuration,
             credential: credential,
-            diagnosticRecorder: diagnosticRecorder,
-            diagnosticContext: context,
-            identityProvider: identityProvider
-        )
-        let source = SMBMediaSource(
-            configuration: configuration,
-            client: client,
-            diagnosticRecorder: diagnosticRecorder,
-            diagnosticContext: context,
-            identityProvider: identityProvider
+            context: context
         )
         try await source.connect()
         sources.append(ConnectedSource(
             id: configuration.sourceID,
             displayName: configuration.displayName,
+            username: credential.username,
             source: source,
             configuration: configuration
         ))
@@ -166,19 +195,10 @@ final class AppModel: ObservableObject {
             requiresEncryption: requiresEncryption
         )
         let credential = try SMBCredential(username: username, password: password)
-        let client = LibSMB2Client(
+        let source = makeSource(
             configuration: configuration,
             credential: credential,
-            diagnosticRecorder: diagnosticRecorder,
-            diagnosticContext: diagnosticContext,
-            identityProvider: identityProvider
-        )
-        let source = SMBMediaSource(
-            configuration: configuration,
-            client: client,
-            diagnosticRecorder: diagnosticRecorder,
-            diagnosticContext: diagnosticContext,
-            identityProvider: identityProvider
+            context: diagnosticContext
         )
 
         do {
@@ -192,13 +212,99 @@ final class AppModel: ObservableObject {
             sources.append(ConnectedSource(
                 id: configuration.sourceID,
                 displayName: configuration.displayName,
+                username: credential.username,
                 source: source,
                 configuration: configuration
             ))
+            sourceRevision &+= 1
         } catch {
             await source.disconnect()
             throw error
         }
+    }
+
+    func updateSMBSource(
+        id: UUID,
+        displayName: String,
+        host: String,
+        share: String,
+        username: String,
+        replacementPassword: String?,
+        domain: String?,
+        requiresEncryption: Bool
+    ) async throws {
+        guard let sourceIndex = sources.firstIndex(where: { $0.id == id }) else {
+            throw SMBSourceStoreError.sourceNotFound(id)
+        }
+
+        let storedSources = try await sourceStore.load()
+        guard let previousStorage = storedSources.first(where: { $0.id == id }) else {
+            throw SMBSourceStoreError.sourceNotFound(id)
+        }
+        let credentialToRestore = try StoredSMBCredential(
+            credential: SMBCredential(
+                username: previousStorage.username,
+                password: previousStorage.password
+            ),
+            domain: previousStorage.domain
+        )
+        let password = replacementPassword ?? previousStorage.password
+        let configuration = try SMBConnectionConfiguration(
+            sourceID: id,
+            displayName: displayName,
+            host: host,
+            share: share,
+            domain: domain,
+            requiresEncryption: requiresEncryption
+        )
+        let credential = try SMBCredential(username: username, password: password)
+        let replacementSource = makeSource(
+            configuration: configuration,
+            credential: credential,
+            context: diagnosticContext
+        )
+
+        do {
+            try await replacementSource.connect()
+        } catch {
+            await replacementSource.disconnect()
+            throw error
+        }
+
+        do {
+            try await credentialStore.save(
+                sourceID: id,
+                credential: credential,
+                domain: configuration.domain
+            )
+            do {
+                try await sourceStore.update(SMBStorageSource.from(
+                    configuration: configuration,
+                    credential: credential
+                ))
+            } catch {
+                do {
+                    try await restoreCredential(credentialToRestore, sourceID: id)
+                } catch {
+                    throw SMBSourceUpdateError.credentialRollbackFailed
+                }
+                throw SMBSourceUpdateError.changesNotSaved
+            }
+        } catch {
+            await replacementSource.disconnect()
+            throw error
+        }
+
+        let previousSource = sources[sourceIndex].source
+        sources[sourceIndex] = ConnectedSource(
+            id: configuration.sourceID,
+            displayName: configuration.displayName,
+            username: credential.username,
+            source: replacementSource,
+            configuration: configuration
+        )
+        sourceRevision &+= 1
+        await previousSource.disconnect()
     }
 
     func removeSource(id: UUID) async {
@@ -208,6 +314,7 @@ final class AppModel: ObservableObject {
         try? await credentialStore.delete(sourceID: id)
         try? await sourceStore.remove(id: id)
         sources.remove(at: index)
+        sourceRevision &+= 1
     }
 
     func source(id: UUID?) -> ConnectedSource? {
@@ -263,6 +370,52 @@ final class AppModel: ObservableObject {
         return try await connected.source.list(directory: path)
     }
 
+    private func makeSource(
+        configuration: SMBConnectionConfiguration,
+        credential: SMBCredential,
+        context: DiagnosticContext
+    ) -> any MediaSource {
+        if let sourceFactory {
+            return sourceFactory(configuration, credential)
+        }
+        let client = LibSMB2Client(
+            configuration: configuration,
+            credential: credential,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: context,
+            identityProvider: identityProvider
+        )
+        return SMBMediaSource(
+            configuration: configuration,
+            client: client,
+            diagnosticRecorder: diagnosticRecorder,
+            diagnosticContext: context,
+            identityProvider: identityProvider
+        )
+    }
+
+    private func restoreCredential(
+        _ storedCredential: StoredSMBCredential,
+        sourceID: UUID
+    ) async throws {
+        do {
+            try await saveCredential(storedCredential, sourceID: sourceID)
+        } catch {
+            try await saveCredential(storedCredential, sourceID: sourceID)
+        }
+    }
+
+    private func saveCredential(
+        _ storedCredential: StoredSMBCredential,
+        sourceID: UUID
+    ) async throws {
+        try await credentialStore.save(
+            sourceID: sourceID,
+            credential: storedCredential.credential,
+            domain: storedCredential.domain
+        )
+    }
+
     static func connectionErrorMessage(for error: Error) -> String {
         switch error {
         case SMBConfigurationError.emptyDisplayName:
@@ -287,6 +440,10 @@ final class AppModel: ObservableObject {
             "The SMB share could not be found."
         case is KeychainCredentialStoreError:
             "The credentials could not be saved securely."
+        case SMBSourceUpdateError.changesNotSaved:
+            "The changes could not be saved. Your previous source settings are still active."
+        case SMBSourceUpdateError.credentialRollbackFailed:
+            "The changes were not saved, and the previous credentials could not be restored."
         default:
             "The SMB source could not be connected."
         }
