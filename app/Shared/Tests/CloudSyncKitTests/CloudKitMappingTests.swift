@@ -3,6 +3,15 @@ import Foundation
 import Testing
 @testable import CloudSyncKit
 
+@Test func cloudKitRequiresTheConfiguredContainerEntitlement() {
+    let container = "iCloud.dev.pierplayer.app"
+
+    #expect(!CloudKitEntitlement.includesRequiredContainer(nil))
+    #expect(!CloudKitEntitlement.includesRequiredContainer(container))
+    #expect(!CloudKitEntitlement.includesRequiredContainer(["iCloud.example.other"]))
+    #expect(CloudKitEntitlement.includesRequiredContainer([container]))
+}
+
 @Test func sourceRecordContainsOnlyApprovedNonSecretFields() throws {
     let source = SyncedSMBSource(
         id: UUID(),

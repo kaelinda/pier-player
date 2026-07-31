@@ -157,8 +157,10 @@ struct PierPlayerApp: App {
             operationID: UUID(),
             parentOperationID: runtime.context.operationID
         )
-        let syncCoordinator = (try? SyncStateStore()).map {
-            SyncCoordinator(transport: CloudKitSyncTransport(), stateStore: $0)
+        let syncCoordinator = (try? SyncStateStore()).flatMap { stateStore in
+            CloudKitSyncTransport.makeIfEntitled().map {
+                SyncCoordinator(transport: $0, stateStore: stateStore)
+            }
         }
         let progressManager = (try? PlaybackProgressStore()).map {
             PlaybackProgressManager(store: $0, syncCoordinator: syncCoordinator)

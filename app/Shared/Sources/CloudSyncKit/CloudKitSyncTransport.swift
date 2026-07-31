@@ -1,5 +1,21 @@
 @preconcurrency import CloudKit
 import Foundation
+import Security
+
+enum CloudKitEntitlement {
+    static let requiredContainerIdentifier = "iCloud.dev.pierplayer.app"
+
+    static func includesRequiredContainer(_ value: Any?) -> Bool {
+        guard let identifiers = value as? [String] else { return false }
+        return identifiers.contains(requiredContainerIdentifier)
+    }
+
+    static func currentValue() -> Any? {
+        guard let task = SecTaskCreateFromSelf(nil) else { return nil }
+        let key = "com.apple.developer.icloud-container-identifiers" as CFString
+        return SecTaskCopyValueForEntitlement(task, key, nil)
+    }
+}
 
 enum CloudKitRecordMapper {
     static let sourceRecordType = "SMBSource"
@@ -101,7 +117,18 @@ public actor CloudKitSyncTransport: CloudSyncTransport {
     private let container: CKContainer
     private let database: CKDatabase
 
-    public init(container: CKContainer = .default()) {
+    public static func makeIfEntitled() -> CloudKitSyncTransport? {
+        guard CloudKitEntitlement.includesRequiredContainer(
+            CloudKitEntitlement.currentValue()
+        ) else {
+            return nil
+        }
+        return CloudKitSyncTransport(container: CKContainer(
+            identifier: CloudKitEntitlement.requiredContainerIdentifier
+        ))
+    }
+
+    public init(container: CKContainer) {
         self.container = container
         self.database = container.privateCloudDatabase
     }

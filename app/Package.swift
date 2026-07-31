@@ -119,6 +119,7 @@ let package = Package(
             path: "Shared/Sources/CloudSyncKit",
             linkerSettings: [
                 .linkedFramework("CloudKit"),
+                .linkedFramework("Security"),
             ]
         ),
         .executableTarget(
