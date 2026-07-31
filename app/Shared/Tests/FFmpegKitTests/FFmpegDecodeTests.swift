@@ -88,6 +88,42 @@ import Testing
     #expect(fallbackStatus.softwareFallbackCount == 1)
 }
 
+@Test func isolatedCorruptH264PacketIsSkippedAndPlaybackContinues() throws {
+    let data = try corruptMP4VideoPackets(at: [1])
+    let session = try FFmpegSession(data: data)
+    try session.prepareForDecoding(
+        configuration: FFmpegDecodeConfiguration(forceHardwareOpenFailure: true)
+    )
+
+    var videoSampleCount = 0
+    var audioSampleCount = 0
+    while let sample = try session.readNextSample() {
+        switch sample {
+        case .video:
+            videoSampleCount += 1
+        case .audio:
+            audioSampleCount += 1
+        case .subtitle:
+            break
+        }
+    }
+
+    #expect(videoSampleCount > 1)
+    #expect(audioSampleCount > 1)
+}
+
+@Test func consecutiveCorruptH264PacketsFailWithStableMediaError() throws {
+    let data = try corruptMP4VideoPackets(at: Array(0...11))
+    let session = try FFmpegSession(data: data)
+    try session.prepareForDecoding(
+        configuration: FFmpegDecodeConfiguration(forceHardwareOpenFailure: true)
+    )
+
+    #expect(throws: FFmpegError.corruptMedia) {
+        while try session.readNextSample() != nil {}
+    }
+}
+
 @Test func cancellationAndClosePreventFurtherDecodeOutput() throws {
     let data = try Data(contentsOf: decodeFixtureURL("video-h264-aac.mkv"))
 
@@ -181,6 +217,19 @@ private func decodeFixtureURL(_ fileName: String) -> URL {
         .deletingLastPathComponent()
         .appendingPathComponent("Fixtures")
         .appendingPathComponent(fileName)
+}
+
+private func corruptMP4VideoPackets(at indexes: [Int]) throws -> Data {
+    var data = try Data(contentsOf: decodeFixtureURL("video-h264-aac.mp4"))
+    let packetOffsets = [
+        2_734, 10_847, 14_118, 16_969, 20_827, 23_923, 27_665,
+        30_868, 34_676, 38_272, 41_169, 45_014, 47_944, 51_587,
+    ]
+    for index in indexes {
+        let offset = packetOffsets[index]
+        data.replaceSubrange(offset..<(offset + 4), with: [0x7f, 0xff, 0xff, 0xff])
+    }
+    return data
 }
 
 private enum CancellableDecodeSourceError: Error {

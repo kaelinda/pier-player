@@ -61,6 +61,62 @@ import Testing
 }
 
 @MainActor
+@Test func retryReopensTheVideoAfterARecoverableFailure() async throws {
+    let item = testVideoItem()
+    let source = ModelTestSource(file: ModelTestFile(size: 1_024))
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: item,
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator
+    )
+
+    await model.start()
+    coordinator.send(snapshot(
+        state: .failed("raw network failure"),
+        failure: PlaybackFailure(
+            boundary: .networkRead,
+            reason: .network,
+            message: "The connection was interrupted."
+        )
+    ))
+    try await waitForModel(model) { $0.failure?.reason == .network }
+
+    await model.retry()
+    try await waitForModel(model) { $0.state == .playing }
+
+    #expect(source.openedPaths == [item.path, item.path])
+    #expect(coordinator.startCount == 2)
+    #expect(coordinator.stopCount == 1)
+}
+
+@MainActor
+@Test func sourceOpenFailureDoesNotExposeThePrivatePath() async {
+    let privatePath = "/Private Share/Family/video.mp4"
+    let source = ModelTestSource(
+        file: ModelTestFile(size: 1_024),
+        openError: MediaSourceError.notFound(path: privatePath)
+    )
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: ModelTestCoordinator()
+    )
+
+    await model.start()
+
+    #expect(model.snapshot.failure?.reason == .sourceUnavailable)
+    #expect(model.snapshot.failure?.message.contains(privatePath) == false)
+    if case let .failed(message) = model.snapshot.state {
+        #expect(!message.contains(privatePath))
+    } else {
+        Issue.record("Expected a failed playback state")
+    }
+}
+
+@MainActor
 @Test func modelRecordsCorrelatedHashedFileOpenDiagnostics() async throws {
     let item = testVideoItem()
     let file = ModelTestFile(size: 1_024)
@@ -250,7 +306,8 @@ func testVideoItem() -> MediaSourceItem {
 func snapshot(
     state: PlaybackState,
     position: TimeInterval = 0,
-    tracks: [PlaybackTrack] = []
+    tracks: [PlaybackTrack] = [],
+    failure: PlaybackFailure? = nil
 ) -> PlaybackCoordinatorSnapshot {
     PlaybackCoordinatorSnapshot(
         sessionID: UUID(),
@@ -262,7 +319,7 @@ func snapshot(
         videoDecoderMode: .software,
         tracks: tracks,
         subtitleText: nil,
-        failure: nil
+        failure: failure
     )
 }
 
@@ -275,12 +332,14 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
     private struct State {
         var startedIdentity: MediaFileIdentity?
         var reopenFile: MediaFileReopener?
+        var startCount = 0
         var stopCount = 0
         var seekPositions: [TimeInterval] = []
         var subtitleSelections: [Int?] = []
     }
 
     var startedIdentity: MediaFileIdentity? { lock.withLock { state.startedIdentity } }
+    var startCount: Int { lock.withLock { state.startCount } }
     var stopCount: Int { lock.withLock { state.stopCount } }
     var seekPositions: [TimeInterval] { lock.withLock { state.seekPositions } }
     var subtitleSelections: [Int?] { lock.withLock { state.subtitleSelections } }
@@ -302,6 +361,7 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
         lock.withLock {
             state.startedIdentity = file.identity
             state.reopenFile = reopenFile
+            state.startCount += 1
         }
         continuation.yield(snapshot(state: .playing))
     }
@@ -339,6 +399,7 @@ final class ModelTestSource: MediaSource, @unchecked Sendable {
     let file: ModelTestFile
     let directoryItems: [MediaSourceItem]
     let additionalFiles: [String: ModelTestFile]
+    let openError: Error?
     private let lock = NSLock()
     private var paths: [String] = []
     private var directories: [String] = []
@@ -349,11 +410,13 @@ final class ModelTestSource: MediaSource, @unchecked Sendable {
     init(
         file: ModelTestFile,
         directoryItems: [MediaSourceItem] = [],
-        additionalFiles: [String: ModelTestFile] = [:]
+        additionalFiles: [String: ModelTestFile] = [:],
+        openError: Error? = nil
     ) {
         self.file = file
         self.directoryItems = directoryItems
         self.additionalFiles = additionalFiles
+        self.openError = openError
     }
 
     func connect() async throws {}
@@ -365,6 +428,7 @@ final class ModelTestSource: MediaSource, @unchecked Sendable {
 
     func open(file path: String) async throws -> any MediaReadableFile {
         lock.withLock { paths.append(path) }
+        if let openError { throw openError }
         return additionalFiles[path] ?? file
     }
 }

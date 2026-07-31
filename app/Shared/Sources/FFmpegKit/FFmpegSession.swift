@@ -375,7 +375,13 @@ public final class FFmpegSession: @unchecked Sendable {
     }
 
     private static func error(from error: inout PPFFError) -> FFmpegError {
-        FFmpegError.native(
+        if error.code == PPFF_ERROR_CORRUPT_MEDIA {
+            return .corruptMedia
+        }
+        if error.code == PPFF_ERROR_DECODER_NOT_FOUND {
+            return .unsupportedCodec
+        }
+        return FFmpegError.native(
             code: Int(error.code),
             message: string(from: &error.message)
         )
