@@ -160,6 +160,9 @@ struct PierPlayerApp: App {
         let syncCoordinator = (try? SyncStateStore()).map {
             SyncCoordinator(transport: CloudKitSyncTransport(), stateStore: $0)
         }
+        let progressManager = (try? PlaybackProgressStore()).map {
+            PlaybackProgressManager(store: $0, syncCoordinator: syncCoordinator)
+        }
         _appModel = StateObject(wrappedValue: AppModel(
             playbackSession: PlaybackSession(
                 diagnosticRecorder: runtime.center.emitter,
@@ -168,7 +171,8 @@ struct PierPlayerApp: App {
             diagnosticRecorder: runtime.center.emitter,
             diagnosticContext: runtime.context,
             identityProvider: runtime.identityProvider,
-            syncCoordinator: syncCoordinator
+            syncCoordinator: syncCoordinator,
+            progressManager: progressManager
         ))
         _diagnosticsViewModel = StateObject(wrappedValue: DiagnosticsViewModel(
             client: LiveDiagnosticsCenterClient(center: runtime.center)

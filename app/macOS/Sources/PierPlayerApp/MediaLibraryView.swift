@@ -169,7 +169,8 @@ struct MediaLibraryView: View {
                 source: selection.source.source,
                 diagnosticRecorder: diagnostics.recorder,
                 diagnosticContext: diagnostics.context,
-                identityProvider: diagnostics.identityProvider
+                identityProvider: diagnostics.identityProvider,
+                progressManager: diagnostics.progressManager
             )
         }
     }

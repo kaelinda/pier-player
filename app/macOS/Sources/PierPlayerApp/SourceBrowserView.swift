@@ -47,7 +47,8 @@ struct SourceBrowserView: View {
                     source: connectedSource.source,
                     diagnosticRecorder: diagnostics.recorder,
                     diagnosticContext: diagnostics.context,
-                    identityProvider: diagnostics.identityProvider
+                    identityProvider: diagnostics.identityProvider,
+                    progressManager: diagnostics.progressManager
                 )
             }
         }

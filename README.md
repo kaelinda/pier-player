@@ -156,6 +156,7 @@ All build commands run from `app/`.
 
 | Path | Responsibility |
 | --- | --- |
+| `app/Shared/Sources/CloudSyncKit/` | Local-first CloudKit synchronization for non-secret sources and playback progress |
 | `app/Shared/Sources/DiagnosticsKit/` | Typed local events, bounded capture, retention, privacy audit, and export |
 | `app/Shared/Sources/MediaSourceKit/` | Source-neutral directory listing, file identity, and random-access file contracts |
 | `app/Shared/Sources/SMBSourceKit/` | `libsmb2` integration, SMB configuration, credentials, and persisted sources |

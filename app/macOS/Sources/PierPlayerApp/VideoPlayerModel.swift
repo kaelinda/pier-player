@@ -1,3 +1,4 @@
+import CloudSyncKit
 import DiagnosticsKit
 import FFmpegKit
 import Foundation
@@ -42,9 +43,12 @@ final class VideoPlayerModel: ObservableObject {
     private let diagnosticRecorder: any DiagnosticRecording
     private let diagnosticContext: DiagnosticContext
     private let identityProvider: (any DiagnosticIdentityProviding)?
+    private let progressManager: (any PlaybackProgressManaging)?
     private var snapshotTask: Task<Void, Never>?
     private var progressTask: Task<Void, Never>?
     private var hasStarted = false
+    private var activeMediaID: String?
+    private var canPersistProgress = false
 
     init(
         item: MediaSourceItem,
@@ -53,7 +57,8 @@ final class VideoPlayerModel: ObservableObject {
         coordinator: (any PlaybackCoordinatorControlling)? = nil,
         diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
         diagnosticContext: DiagnosticContext? = nil,
-        identityProvider: (any DiagnosticIdentityProviding)? = nil
+        identityProvider: (any DiagnosticIdentityProviding)? = nil,
+        progressManager: (any PlaybackProgressManaging)? = nil
     ) {
         let renderer = renderer ?? SampleBufferRenderer()
         let diagnosticContext = diagnosticContext ?? DiagnosticContext(
@@ -67,6 +72,7 @@ final class VideoPlayerModel: ObservableObject {
         self.diagnosticRecorder = diagnosticRecorder
         self.diagnosticContext = diagnosticContext
         self.identityProvider = identityProvider
+        self.progressManager = progressManager
         self.coordinator = coordinator ?? PlaybackCoordinator(
             renderer: renderer,
             diagnosticRecorder: diagnosticRecorder,
@@ -119,6 +125,8 @@ final class VideoPlayerModel: ObservableObject {
                 }
                 return
             }
+            activeMediaID = MediaSyncIdentity.make(from: file.identity)
+            canPersistProgress = false
             try await coordinator.start(
                 file: file,
                 reopenFile: { [
@@ -137,6 +145,11 @@ final class VideoPlayerModel: ObservableObject {
                     )
                 }
             )
+            await restoreProgressIfAvailable()
+            canPersistProgress = true
+            if snapshot.state == .ended {
+                await persistProgress(force: true)
+            }
             await discoverExternalSubtitles()
         } catch is CancellationError {
             await stop()
@@ -148,6 +161,7 @@ final class VideoPlayerModel: ObservableObject {
 
     func stop() async {
         guard hasStarted else { return }
+        await persistProgress(force: true)
         hasStarted = false
         let snapshotTask = self.snapshotTask
         let progressTask = self.progressTask
@@ -158,6 +172,8 @@ final class VideoPlayerModel: ObservableObject {
         await snapshotTask?.value
         await progressTask?.value
         await coordinator.stop()
+        activeMediaID = nil
+        canPersistProgress = false
         snapshot = .idle
         timelinePosition = 0
     }
@@ -174,6 +190,7 @@ final class VideoPlayerModel: ObservableObject {
         do {
             if snapshot.intendsToPlay {
                 try await coordinator.pause()
+                await persistProgress(force: true)
             } else {
                 try await coordinator.resume()
             }
@@ -285,6 +302,7 @@ final class VideoPlayerModel: ObservableObject {
                 if !self.isScrubbing {
                     self.timelinePosition = max(self.snapshot.position, self.renderer.timelineTime)
                 }
+                await self.persistProgress(force: false)
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
@@ -295,6 +313,33 @@ final class VideoPlayerModel: ObservableObject {
         if !isScrubbing {
             timelinePosition = snapshot.position
         }
+        if snapshot.state == .ended {
+            Task { [weak self] in await self?.persistProgress(force: true) }
+        }
+    }
+
+    private func restoreProgressIfAvailable() async {
+        guard let activeMediaID,
+              let progressManager,
+              let progress = await progressManager.progress(mediaID: activeMediaID),
+              progress.effectiveResumePosition > 0 else { return }
+        do {
+            _ = try await coordinator.seek(to: progress.effectiveResumePosition)
+            timelinePosition = progress.effectiveResumePosition
+        } catch {
+            return
+        }
+    }
+
+    private func persistProgress(force: Bool) async {
+        guard canPersistProgress, let activeMediaID, let progressManager else { return }
+        await progressManager.record(
+            mediaID: activeMediaID,
+            sourceID: source.id,
+            position: timelinePosition,
+            duration: snapshot.duration,
+            force: force
+        )
     }
 
     private func clamped(_ position: TimeInterval) -> TimeInterval {

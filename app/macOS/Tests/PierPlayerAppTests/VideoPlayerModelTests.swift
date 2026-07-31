@@ -1,3 +1,4 @@
+import CloudSyncKit
 import DiagnosticsKit
 import FFmpegKit
 import Foundation
@@ -7,6 +8,126 @@ import RenderKit
 import SMBSourceKit
 import Testing
 @testable import PierPlayerApp
+
+@MainActor
+@Test func modelRestoresSyncedProgressAndFlushesOnStop() async throws {
+    let item = testVideoItem()
+    let file = ModelTestFile(size: 1_024)
+    let source = ModelTestSource(file: file)
+    let coordinator = ModelTestCoordinator()
+    let progress = ModelProgressManager()
+    let mediaID = MediaSyncIdentity.make(from: file.identity)
+    await progress.set(try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: source.id,
+        position: 30,
+        duration: 100
+    ))
+    let model = VideoPlayerModel(
+        item: item,
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+
+    await model.start()
+    try await waitForModel(model) { $0.state == .playing }
+    #expect(coordinator.seekPositions == [30])
+
+    coordinator.send(snapshot(state: .playing, position: 40, duration: 100))
+    try await waitForModel(model) { $0.position == 40 }
+    await model.togglePlayback()
+    let pauseRecords = await progress.records
+    #expect(pauseRecords.contains { $0.force && $0.position == 40 })
+    let pauseFlushCount = pauseRecords.count(where: \.force)
+    await model.stop()
+
+    let stopRecords = await progress.records
+    #expect(stopRecords.count(where: \.force) == pauseFlushCount + 1)
+    #expect(stopRecords.last(where: \.force)?.position == 40)
+}
+
+@MainActor
+@Test func modelDoesNotOverwriteProgressBeforeRestoringIt() async throws {
+    let file = ModelTestFile(size: 1_024)
+    let source = ModelTestSource(file: file)
+    let coordinator = ModelTestCoordinator(startDelay: .milliseconds(300))
+    let progress = ModelProgressManager()
+    let mediaID = MediaSyncIdentity.make(from: file.identity)
+    await progress.set(try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: source.id,
+        position: 30,
+        duration: 100
+    ))
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+
+    await model.start()
+
+    #expect(coordinator.seekPositions == [30])
+    await model.stop()
+}
+
+@MainActor
+@Test func modelSkipsNonResumableAndDifferentMediaProgress() async throws {
+    for (position, storedSize) in [(4.9, 1_024), (95.0, 1_024), (30.0, 2_048)] {
+        let file = ModelTestFile(size: 1_024)
+        let source = ModelTestSource(file: file)
+        let coordinator = ModelTestCoordinator()
+        let progress = ModelProgressManager()
+        let storedIdentity = MediaFileIdentity(
+            sourceID: file.identity.sourceID,
+            path: file.identity.path,
+            size: Int64(storedSize),
+            modifiedAt: file.identity.modifiedAt
+        )
+        await progress.set(try PlaybackProgress(
+            mediaID: MediaSyncIdentity.make(from: storedIdentity),
+            sourceID: source.id,
+            position: position,
+            duration: 100
+        ))
+        let model = VideoPlayerModel(
+            item: testVideoItem(),
+            source: source,
+            renderer: SampleBufferRenderer(),
+            coordinator: coordinator,
+            progressManager: progress
+        )
+
+        await model.start()
+        #expect(coordinator.seekPositions.isEmpty)
+        await model.stop()
+    }
+}
+
+@MainActor
+@Test func modelForceFlushesWhenPlaybackEnds() async throws {
+    let source = ModelTestSource(file: ModelTestFile(size: 1_024))
+    let coordinator = ModelTestCoordinator()
+    let progress = ModelProgressManager()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+
+    await model.start()
+    coordinator.send(snapshot(state: .ended, position: 100, duration: 100))
+    try await waitForProgress(progress) { records in
+        records.contains { $0.force && $0.position == 100 }
+    }
+    await model.stop()
+}
 
 @MainActor
 @Test func openingStreamsAnOpenHandleWithoutAggregatingTheFile() async throws {
@@ -306,6 +427,7 @@ func testVideoItem() -> MediaSourceItem {
 func snapshot(
     state: PlaybackState,
     position: TimeInterval = 0,
+    duration: TimeInterval = 2,
     tracks: [PlaybackTrack] = [],
     failure: PlaybackFailure? = nil
 ) -> PlaybackCoordinatorSnapshot {
@@ -315,7 +437,7 @@ func snapshot(
         state: state,
         intendsToPlay: state == .playing,
         position: position,
-        duration: 2,
+        duration: duration,
         videoDecoderMode: .software,
         tracks: tracks,
         subtitleText: nil,
@@ -326,6 +448,7 @@ func snapshot(
 final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sendable {
     let snapshots: AsyncStream<PlaybackCoordinatorSnapshot>
     private let continuation: AsyncStream<PlaybackCoordinatorSnapshot>.Continuation
+    private let startDelay: Duration?
     private let lock = NSLock()
     private var state = State()
 
@@ -344,10 +467,11 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
     var seekPositions: [TimeInterval] { lock.withLock { state.seekPositions } }
     var subtitleSelections: [Int?] { lock.withLock { state.subtitleSelections } }
 
-    init() {
+    init(startDelay: Duration? = nil) {
         let stream = AsyncStream<PlaybackCoordinatorSnapshot>.makeStream()
         snapshots = stream.stream
         continuation = stream.continuation
+        self.startDelay = startDelay
     }
 
     func send(_ snapshot: PlaybackCoordinatorSnapshot) {
@@ -363,7 +487,10 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
             state.reopenFile = reopenFile
             state.startCount += 1
         }
-        continuation.yield(snapshot(state: .playing))
+        continuation.yield(snapshot(state: .playing, duration: 100))
+        if let startDelay {
+            try await Task.sleep(for: startDelay)
+        }
     }
 
     func reopen() async throws -> any MediaReadableFile {
@@ -391,6 +518,63 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
         lock.withLock { state.stopCount += 1 }
         continuation.yield(.idle)
     }
+}
+
+private actor ModelProgressManager: PlaybackProgressManaging {
+    struct Record: Sendable {
+        let position: TimeInterval
+        let force: Bool
+    }
+
+    private var storedProgress: PlaybackProgress?
+    private(set) var records: [Record] = []
+
+    func set(_ progress: PlaybackProgress) {
+        storedProgress = progress
+    }
+
+    func progress(mediaID: String) -> PlaybackProgress? {
+        storedProgress?.mediaID == mediaID ? storedProgress : nil
+    }
+
+    func record(
+        mediaID: String,
+        sourceID: UUID,
+        position: TimeInterval,
+        duration: TimeInterval,
+        force: Bool
+    ) {
+        records.append(Record(position: position, force: force))
+        storedProgress = try? PlaybackProgress(
+            mediaID: mediaID,
+            sourceID: sourceID,
+            position: position,
+            duration: duration
+        )
+    }
+
+    func allProgress() -> [PlaybackProgress] {
+        storedProgress.map { [$0] } ?? []
+    }
+
+    func replaceAll(_ progress: [PlaybackProgress]) {
+        storedProgress = progress.first
+    }
+}
+
+@MainActor
+private func waitForProgress(
+    _ manager: ModelProgressManager,
+    timeout: Duration = .seconds(1),
+    predicate: @escaping ([ModelProgressManager.Record]) -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+        if predicate(await manager.records) { return }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    Issue.record("timed out waiting for persisted playback progress")
 }
 
 final class ModelTestSource: MediaSource, @unchecked Sendable {

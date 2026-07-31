@@ -1,3 +1,4 @@
+import CloudSyncKit
 import DiagnosticsKit
 import MediaSourceKit
 import PlaybackCore
@@ -14,7 +15,8 @@ struct VideoPlayerSheet: View {
         source: any MediaSource,
         diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
         diagnosticContext: DiagnosticContext? = nil,
-        identityProvider: (any DiagnosticIdentityProviding)? = nil
+        identityProvider: (any DiagnosticIdentityProviding)? = nil,
+        progressManager: (any PlaybackProgressManaging)? = nil
     ) {
         self.item = item
         _playerModel = StateObject(
@@ -23,7 +25,8 @@ struct VideoPlayerSheet: View {
                 source: source,
                 diagnosticRecorder: diagnosticRecorder,
                 diagnosticContext: diagnosticContext,
-                identityProvider: identityProvider
+                identityProvider: identityProvider,
+                progressManager: progressManager
             )
         )
     }

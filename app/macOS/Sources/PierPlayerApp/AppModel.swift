@@ -21,6 +21,7 @@ final class AppModel: ObservableObject {
         let recorder: any DiagnosticRecording
         let context: DiagnosticContext
         let identityProvider: (any DiagnosticIdentityProviding)?
+        let progressManager: (any PlaybackProgressManaging)?
     }
 
     struct ConnectedSource: Identifiable {
@@ -59,6 +60,7 @@ final class AppModel: ObservableObject {
     private let identityProvider: (any DiagnosticIdentityProviding)?
     private let sourceFactory: SourceFactory?
     private let syncCoordinator: (any CloudSyncCoordinating)?
+    private let progressManager: (any PlaybackProgressManaging)?
 
     init(
         playbackSession: PlaybackSession = PlaybackSession(),
@@ -68,7 +70,8 @@ final class AppModel: ObservableObject {
         diagnosticContext: DiagnosticContext? = nil,
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
         sourceFactory: SourceFactory? = nil,
-        syncCoordinator: (any CloudSyncCoordinating)? = nil
+        syncCoordinator: (any CloudSyncCoordinating)? = nil,
+        progressManager: (any PlaybackProgressManaging)? = nil
     ) {
         self.playbackSession = playbackSession
         self.credentialStore = credentialStore
@@ -84,6 +87,7 @@ final class AppModel: ObservableObject {
         self.identityProvider = identityProvider
         self.sourceFactory = sourceFactory
         self.syncCoordinator = syncCoordinator
+        self.progressManager = progressManager
     }
 
     func restore() async {
@@ -187,12 +191,14 @@ final class AppModel: ObservableObject {
     func synchronizeSources() async {
         guard let syncCoordinator,
               let stored = try? await sourceStore.load() else { return }
+        let localProgress = await progressManager?.allProgress() ?? []
         let local = CloudSyncSnapshot(
             sources: stored.map(\.syncedSource),
-            progress: []
+            progress: localProgress
         )
         let merged = await syncCoordinator.synchronize(local: local)
         let mergedStorage = merged.sources.map(\.storageSource)
+        await progressManager?.replaceAll(merged.progress)
         guard mergedStorage != stored else { return }
 
         try? await sourceStore.replaceAll(mergedStorage)
@@ -481,7 +487,8 @@ final class AppModel: ObservableObject {
                 operationID: UUID(),
                 parentOperationID: diagnosticContext.operationID
             ),
-            identityProvider: identityProvider
+            identityProvider: identityProvider,
+            progressManager: progressManager
         )
     }
 
