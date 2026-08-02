@@ -20,6 +20,25 @@ import Testing
     #expect(try await fixture.store.progress(mediaID: second.mediaID) == second)
 }
 
+@Test func progressStoreRecordCarriesCompletionAcrossOpeningPosition() async throws {
+    let fixture = try ProgressStoreFixture()
+    defer { fixture.cleanup() }
+    let sourceID = UUID()
+    let completed = try progress(id: "e", sourceID: sourceID, position: 96)
+    try await fixture.store.upsert(completed)
+
+    let opening = try await fixture.store.record(
+        mediaID: completed.mediaID,
+        sourceID: sourceID,
+        position: 4,
+        duration: 100,
+        modifiedAt: Date(timeIntervalSince1970: 100)
+    )
+
+    #expect(opening.isCompleted)
+    #expect(try await fixture.store.progress(mediaID: completed.mediaID) == opening)
+}
+
 @Test func corruptProgressFileIsIsolatedAsEmptyState() async throws {
     let fixture = try ProgressStoreFixture()
     defer { fixture.cleanup() }

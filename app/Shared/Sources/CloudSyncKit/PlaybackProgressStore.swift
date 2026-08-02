@@ -1,6 +1,6 @@
 import Foundation
 
-public actor PlaybackProgressStore {
+public actor PlaybackProgressStore: PlaybackProgressStoring {
     private let decoder = JSONDecoder()
     private let encoder: JSONEncoder
     private let fileURL: URL
@@ -31,6 +31,35 @@ public actor PlaybackProgressStore {
 
     public func progress(mediaID: String) throws -> PlaybackProgress? {
         try load().first { $0.mediaID == mediaID }
+    }
+
+    func record(
+        mediaID: String,
+        sourceID: UUID,
+        position: TimeInterval,
+        duration: TimeInterval,
+        modifiedAt: Date
+    ) throws -> PlaybackProgress {
+        var values = try load()
+        let existingIndex = values.firstIndex { $0.mediaID == mediaID }
+        let completionOverride = position < 5
+            ? existingIndex.map { values[$0].isCompleted }
+            : nil
+        let progress = try PlaybackProgress(
+            mediaID: mediaID,
+            sourceID: sourceID,
+            position: position,
+            duration: duration,
+            modifiedAt: modifiedAt,
+            isCompleted: completionOverride
+        )
+        if let existingIndex {
+            values[existingIndex] = progress
+        } else {
+            values.append(progress)
+        }
+        try save(values)
+        return progress
     }
 
     public func upsert(_ progress: PlaybackProgress) throws {

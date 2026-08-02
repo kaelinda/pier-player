@@ -23,11 +23,22 @@ final class ActivePlaybackLifecycle {
         let forcePersist: Action
     }
 
+    private struct ForcePersistWaiter {
+        let registrationToken: UUID
+        let action: Action
+        let completion: @MainActor () -> Void
+    }
+
     private var registrations: [UUID: Registration] = [:]
     private var activeRegistrationToken: UUID?
     private var stopTasks: [UUID: Task<Void, Never>] = [:]
-    private var forcePersistTask: (id: UUID, task: Task<Void, Never>)?
-    private var forcePersistWaiters: [UUID: @MainActor () -> Void] = [:]
+    private var forcePersistTask: (
+        id: UUID,
+        registrationToken: UUID,
+        task: Task<Void, Never>
+    )?
+    private var forcePersistWaiters: [UUID: ForcePersistWaiter] = [:]
+    private var forcePersistWaiterOrder: [UUID] = []
 
     @discardableResult
     func register(
@@ -68,29 +79,52 @@ final class ActivePlaybackLifecycle {
             return nil
         }
         let waiterToken = UUID()
-        forcePersistWaiters[waiterToken] = onCompletion
-        guard forcePersistTask == nil else { return waiterToken }
-        let id = UUID()
-        let task = Task { @MainActor in
-            await action()
-            finishForcePersist(id: id)
-        }
-        forcePersistTask = (id, task)
+        forcePersistWaiters[waiterToken] = ForcePersistWaiter(
+            registrationToken: activeRegistrationToken,
+            action: action,
+            completion: onCompletion
+        )
+        forcePersistWaiterOrder.append(waiterToken)
+        startNextForcePersist()
         return waiterToken
     }
 
+    private func startNextForcePersist() {
+        guard forcePersistTask == nil,
+              let waiterToken = forcePersistWaiterOrder.first,
+              let waiter = forcePersistWaiters[waiterToken] else { return }
+        let id = UUID()
+        let task = Task { @MainActor in
+            await waiter.action()
+            finishForcePersist(id: id)
+        }
+        forcePersistTask = (id, waiter.registrationToken, task)
+    }
+
     func cancelForcePersistWaiter(token: UUID) {
-        forcePersistWaiters[token] = nil
-        guard forcePersistWaiters.isEmpty, let forcePersistTask else { return }
+        guard forcePersistWaiters.removeValue(forKey: token) != nil else { return }
+        forcePersistWaiterOrder.removeAll { $0 == token }
+        guard let forcePersistTask else { return }
+        let hasCurrentGenerationWaiters = forcePersistWaiters.values.contains {
+            $0.registrationToken == forcePersistTask.registrationToken
+        }
+        guard !hasCurrentGenerationWaiters else { return }
         forcePersistTask.task.cancel()
         self.forcePersistTask = nil
+        startNextForcePersist()
     }
 
     private func finishForcePersist(id: UUID) {
-        guard forcePersistTask?.id == id else { return }
-        forcePersistTask = nil
-        let completions = Array(forcePersistWaiters.values)
-        forcePersistWaiters.removeAll()
+        guard let forcePersistTask, forcePersistTask.id == id else { return }
+        self.forcePersistTask = nil
+        let completedWaiterTokens = forcePersistWaiterOrder.filter {
+            forcePersistWaiters[$0]?.registrationToken == forcePersistTask.registrationToken
+        }
+        let completions = completedWaiterTokens.compactMap {
+            forcePersistWaiters.removeValue(forKey: $0)?.completion
+        }
+        forcePersistWaiterOrder.removeAll { completedWaiterTokens.contains($0) }
+        startNextForcePersist()
         for completion in completions {
             completion()
         }

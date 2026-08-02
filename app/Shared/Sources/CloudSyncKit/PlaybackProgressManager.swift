@@ -1,5 +1,21 @@
 import Foundation
 
+protocol PlaybackProgressStoring: Actor {
+    func load() async throws -> [PlaybackProgress]
+    func progress(mediaID: String) async throws -> PlaybackProgress?
+    func record(
+        mediaID: String,
+        sourceID: UUID,
+        position: TimeInterval,
+        duration: TimeInterval,
+        modifiedAt: Date
+    ) async throws -> PlaybackProgress
+    func upsert(_ progress: PlaybackProgress) async throws
+    func removeAll(sourceID: UUID) async throws
+    func replaceAll(_ values: [PlaybackProgress]) async throws
+    func restore(_ snapshot: [PlaybackProgress], sourceID: UUID) async throws
+}
+
 public protocol PlaybackProgressManaging: Sendable {
     func progress(mediaID: String) async -> PlaybackProgress?
     func record(
@@ -27,16 +43,30 @@ public actor PlaybackProgressManager: PlaybackProgressCleanupManaging {
     private struct LastSave: Sendable {
         let sourceID: UUID
         let savedAt: Date
+        let sequence: UInt64
     }
 
-    private let store: PlaybackProgressStore
+    private let store: any PlaybackProgressStoring
     private let syncCoordinator: (any CloudSyncCoordinating)?
     private let minimumSaveInterval: TimeInterval
     private let now: @Sendable () -> Date
     private var lastSavedAt: [String: LastSave] = [:]
+    private var nextRecordSequence: UInt64 = 0
 
     public init(
         store: PlaybackProgressStore,
+        syncCoordinator: (any CloudSyncCoordinating)? = nil,
+        minimumSaveInterval: TimeInterval = 15,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.store = store
+        self.syncCoordinator = syncCoordinator
+        self.minimumSaveInterval = minimumSaveInterval
+        self.now = now
+    }
+
+    init(
+        store: any PlaybackProgressStoring,
         syncCoordinator: (any CloudSyncCoordinating)? = nil,
         minimumSaveInterval: TimeInterval = 15,
         now: @escaping @Sendable () -> Date = Date.init
@@ -65,21 +95,24 @@ public actor PlaybackProgressManager: PlaybackProgressCleanupManaging {
            timestamp.timeIntervalSince(lastSaved.savedAt) < minimumSaveInterval {
             return
         }
-        var completionOverride: Bool?
-        if position < 5 {
-            completionOverride = (try? await store.progress(mediaID: mediaID))?.isCompleted
-        }
-        guard let progress = try? PlaybackProgress(
-            mediaID: mediaID,
-            sourceID: sourceID,
-            position: position,
-            duration: duration,
-            modifiedAt: timestamp,
-            isCompleted: completionOverride
-        ) else { return }
+        let sequence = nextRecordSequence
+        nextRecordSequence &+= 1
         do {
-            try await store.upsert(progress)
-            lastSavedAt[mediaID] = LastSave(sourceID: sourceID, savedAt: timestamp)
+            let progress = try await store.record(
+                mediaID: mediaID,
+                sourceID: sourceID,
+                position: position,
+                duration: duration,
+                modifiedAt: timestamp
+            )
+            if let lastSaved = lastSavedAt[mediaID], lastSaved.sequence > sequence {
+                return
+            }
+            lastSavedAt[mediaID] = LastSave(
+                sourceID: sourceID,
+                savedAt: timestamp,
+                sequence: sequence
+            )
             await syncCoordinator?.enqueue(.upsertProgress(progress))
         } catch {
             return

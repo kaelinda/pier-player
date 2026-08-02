@@ -82,6 +82,55 @@ import Testing
     #expect(await manager.progress(mediaID: mediaID)?.isCompleted == false)
 }
 
+@Test func managerSuspendedOpeningRecordDoesNotOverwriteNewerProgressOrSyncMutation() async throws {
+    let mediaID = String(repeating: "f", count: 64)
+    let sourceID = UUID()
+    let completed = try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 96,
+        duration: 100,
+        modifiedAt: Date(timeIntervalSince1970: 99)
+    )
+    let store = ControlledProgressStore(initial: completed)
+    let sync = ProgressRecordingSyncCoordinator()
+    let clock = SequencedProgressTestClock(
+        dates: [
+            Date(timeIntervalSince1970: 100),
+            Date(timeIntervalSince1970: 101),
+        ]
+    )
+    let manager = PlaybackProgressManager(
+        store: store,
+        syncCoordinator: sync,
+        now: clock.current
+    )
+
+    let openingRecord = Task {
+        await manager.record(
+            mediaID: mediaID,
+            sourceID: sourceID,
+            position: 4,
+            duration: 100,
+            force: true
+        )
+    }
+    await store.waitUntilOpeningRecordReachedStore()
+
+    await manager.record(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 10,
+        duration: 100,
+        force: true
+    )
+    await store.releaseOpeningRead()
+    await openingRecord.value
+
+    #expect(await store.progressWithoutSuspending(mediaID: mediaID)?.position == 10)
+    #expect(await sync.mutations.last?.progressPosition == 10)
+}
+
 @Test func managerRemovesOnlyProgressForRequestedSource() async throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -205,6 +254,113 @@ private final class ProgressTestClock: @unchecked Sendable {
     func current() -> Date { lock.withLock { value } }
 }
 
+private final class SequencedProgressTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dates: [Date]
+
+    init(dates: [Date]) { self.dates = dates }
+
+    func current() -> Date {
+        lock.withLock { dates.removeFirst() }
+    }
+}
+
+private actor ControlledProgressStore: PlaybackProgressStoring {
+    private var values: [String: PlaybackProgress]
+    private let openingReadGate = ProgressReadGate()
+    private let reachedStream: AsyncStream<Void>
+    private let reachedContinuation: AsyncStream<Void>.Continuation
+
+    init(initial: PlaybackProgress) {
+        values = [initial.mediaID: initial]
+        let pair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        reachedStream = pair.stream
+        reachedContinuation = pair.continuation
+    }
+
+    func waitUntilOpeningRecordReachedStore() async {
+        var iterator = reachedStream.makeAsyncIterator()
+        _ = await iterator.next()
+    }
+
+    func releaseOpeningRead() async {
+        await openingReadGate.release()
+    }
+
+    func progressWithoutSuspending(mediaID: String) -> PlaybackProgress? {
+        values[mediaID]
+    }
+
+    func load() -> [PlaybackProgress] {
+        Array(values.values)
+    }
+
+    func progress(mediaID: String) async -> PlaybackProgress? {
+        let snapshot = values[mediaID]
+        reachedContinuation.yield()
+        await openingReadGate.waitForRelease()
+        return snapshot
+    }
+
+    func record(
+        mediaID: String,
+        sourceID: UUID,
+        position: TimeInterval,
+        duration: TimeInterval,
+        modifiedAt: Date
+    ) async throws -> PlaybackProgress {
+        let progress = try PlaybackProgress(
+            mediaID: mediaID,
+            sourceID: sourceID,
+            position: position,
+            duration: duration,
+            modifiedAt: modifiedAt,
+            isCompleted: position < 5 ? values[mediaID]?.isCompleted : nil
+        )
+        values[mediaID] = progress
+        if position < 5 {
+            reachedContinuation.yield()
+            await openingReadGate.waitForRelease()
+        }
+        return progress
+    }
+
+    func upsert(_ progress: PlaybackProgress) {
+        values[progress.mediaID] = progress
+    }
+
+    func removeAll(sourceID: UUID) {
+        values = values.filter { $0.value.sourceID != sourceID }
+    }
+
+    func replaceAll(_ values: [PlaybackProgress]) {
+        self.values = Dictionary(uniqueKeysWithValues: values.map { ($0.mediaID, $0) })
+    }
+
+    func restore(_ snapshot: [PlaybackProgress], sourceID: UUID) {
+        removeAll(sourceID: sourceID)
+        for progress in snapshot {
+            values[progress.mediaID] = progress
+        }
+    }
+}
+
+private actor ProgressReadGate {
+    private var isReleased = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func waitForRelease() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        isReleased = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor ProgressRecordingSyncCoordinator: CloudSyncCoordinating {
     private(set) var mutations: [CloudSyncMutation] = []
 
@@ -213,4 +369,11 @@ private actor ProgressRecordingSyncCoordinator: CloudSyncCoordinating {
     }
 
     func synchronize(local: CloudSyncSnapshot) -> CloudSyncSnapshot { local }
+}
+
+private extension CloudSyncMutation {
+    var progressPosition: TimeInterval? {
+        guard case let .upsertProgress(progress) = self else { return nil }
+        return progress.position
+    }
 }

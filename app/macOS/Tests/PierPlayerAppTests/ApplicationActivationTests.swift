@@ -119,6 +119,59 @@ import Testing
 }
 
 @MainActor
+@Test func newPlaybackRegistrationDoesNotJoinInFlightFlushGeneration() async {
+    let playback = ActivePlaybackLifecycle()
+    let oldBlocker = LifecycleFlushBlocker()
+    let newBlocker = LifecycleFlushBlocker()
+    _ = playback.register(
+        sourceID: UUID(),
+        stop: {},
+        forcePersist: { await oldBlocker.wait() }
+    )
+    let lifecycle = ApplicationLifecycleCoordinator(
+        activePlayback: playback,
+        flushTimeout: .seconds(1)
+    )
+    var oldDiagnosticsFinished = false
+    var newDiagnosticsFinished = false
+    var oldRequestIterator = oldBlocker.requests.makeAsyncIterator()
+
+    let oldGeneration = Task { @MainActor in
+        await lifecycle.sceneDidBecomeInactive {
+            oldDiagnosticsFinished = true
+        }
+    }
+    _ = await oldRequestIterator.next()
+
+    var newFlushCount = 0
+    _ = playback.register(
+        sourceID: UUID(),
+        stop: {},
+        forcePersist: {
+            newFlushCount += 1
+            await newBlocker.wait()
+        }
+    )
+    let newGeneration = Task { @MainActor in
+        await lifecycle.prepareForTermination {
+            newDiagnosticsFinished = true
+        }
+    }
+
+    await oldBlocker.release()
+    await oldGeneration.value
+    await Task.yield()
+
+    #expect(oldDiagnosticsFinished)
+    #expect(newFlushCount == 1)
+    #expect(!newDiagnosticsFinished)
+
+    await newBlocker.release()
+    await newGeneration.value
+    #expect(newDiagnosticsFinished)
+}
+
+@MainActor
 @Test func unregisteringStaleTokenKeepsNewPlaybackRegistration() async {
     let playback = ActivePlaybackLifecycle()
     var oldFlushCount = 0
