@@ -493,15 +493,37 @@ final class AppModel: ObservableObject {
             throw SMBSourceRemovalError.changesNotSaved
         }
 
-        let storedProgress = await progressManager?.allProgress().filter { $0.sourceID == id } ?? []
+        let progressCleanup: (any PlaybackProgressCleanupManaging)?
+        if let progressManager {
+            guard let strictCleanup = progressManager as? any PlaybackProgressCleanupManaging else {
+                throw SMBSourceRemovalError.changesNotSaved
+            }
+            progressCleanup = strictCleanup
+        } else {
+            progressCleanup = nil
+        }
+        let storedProgress: [PlaybackProgress]
         let storedHistory: [PlaybackHistoryEntry]
         do {
+            storedProgress = try await progressCleanup?.snapshotPersistently(sourceID: id) ?? []
             storedHistory = try await historyStore?.load().filter { $0.sourceID == id } ?? []
             try await historyStore?.removeAll(sourceID: id)
         } catch {
             throw SMBSourceRemovalError.changesNotSaved
         }
-        await progressManager?.removeAll(sourceID: id)
+        do {
+            try await progressCleanup?.removePersistently(sourceID: id)
+        } catch {
+            guard await restoreContinuity(
+                sourceID: id,
+                progress: storedProgress,
+                history: storedHistory,
+                progressCleanup: progressCleanup
+            ) else {
+                throw SMBSourceRemovalError.continuityRollbackFailed
+            }
+            throw SMBSourceRemovalError.changesNotSaved
+        }
 
         do {
             try await credentialStore.delete(sourceID: id)
@@ -509,7 +531,8 @@ final class AppModel: ObservableObject {
             guard await restoreContinuity(
                 sourceID: id,
                 progress: storedProgress,
-                history: storedHistory
+                history: storedHistory,
+                progressCleanup: progressCleanup
             ) else {
                 throw SMBSourceRemovalError.continuityRollbackFailed
             }
@@ -533,7 +556,8 @@ final class AppModel: ObservableObject {
             guard await restoreContinuity(
                 sourceID: id,
                 progress: storedProgress,
-                history: storedHistory
+                history: storedHistory,
+                progressCleanup: progressCleanup
             ) else {
                 throw SMBSourceRemovalError.continuityRollbackFailed
             }
@@ -583,13 +607,22 @@ final class AppModel: ObservableObject {
     private func restoreContinuity(
         sourceID: UUID,
         progress: [PlaybackProgress],
-        history: [PlaybackHistoryEntry]
+        history: [PlaybackHistoryEntry],
+        progressCleanup: (any PlaybackProgressCleanupManaging)?
     ) async -> Bool {
-        if let progressManager {
-            let current = await progressManager.allProgress()
-            let restored = current.filter { $0.sourceID != sourceID } + progress
-            await progressManager.replaceAll(restored)
+        var restored = true
+        do {
+            try await progressCleanup?.restorePersistently(progress, sourceID: sourceID)
+        } catch {
+            restored = false
         }
+        if !(await restoreHistory(history)) {
+            restored = false
+        }
+        return restored
+    }
+
+    private func restoreHistory(_ history: [PlaybackHistoryEntry]) async -> Bool {
         do {
             for entry in history {
                 try await historyStore?.upsert(entry)

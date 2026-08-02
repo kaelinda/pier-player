@@ -14,7 +14,16 @@ public protocol PlaybackProgressManaging: Sendable {
     func removeAll(sourceID: UUID) async
 }
 
-public actor PlaybackProgressManager: PlaybackProgressManaging {
+public protocol PlaybackProgressCleanupManaging: PlaybackProgressManaging {
+    func snapshotPersistently(sourceID: UUID) async throws -> [PlaybackProgress]
+    func removePersistently(sourceID: UUID) async throws
+    func restorePersistently(
+        _ snapshot: [PlaybackProgress],
+        sourceID: UUID
+    ) async throws
+}
+
+public actor PlaybackProgressManager: PlaybackProgressCleanupManaging {
     private struct LastSave: Sendable {
         let sourceID: UUID
         let savedAt: Date
@@ -92,5 +101,25 @@ public actor PlaybackProgressManager: PlaybackProgressManaging {
         } catch {
             return
         }
+    }
+
+    public func snapshotPersistently(sourceID: UUID) async throws -> [PlaybackProgress] {
+        try await store.load().filter { $0.sourceID == sourceID }
+    }
+
+    public func removePersistently(sourceID: UUID) async throws {
+        try await store.removeAll(sourceID: sourceID)
+        lastSavedAt = lastSavedAt.filter { $0.value.sourceID != sourceID }
+    }
+
+    public func restorePersistently(
+        _ snapshot: [PlaybackProgress],
+        sourceID: UUID
+    ) async throws {
+        let current = try await store.load()
+        try await store.replaceAll(
+            current.filter { $0.sourceID != sourceID } + snapshot
+        )
+        lastSavedAt = lastSavedAt.filter { $0.value.sourceID != sourceID }
     }
 }

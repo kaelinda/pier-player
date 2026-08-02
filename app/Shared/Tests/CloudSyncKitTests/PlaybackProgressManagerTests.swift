@@ -115,6 +115,52 @@ import Testing
     #expect(await manager.progress(mediaID: retainedMediaID)?.position == 30)
 }
 
+@Test func managerStrictCleanupSnapshotsRemovesAndRestoresOneSource() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = PlaybackProgressStore(fileURL: directory.appendingPathComponent("progress.json"))
+    let manager = PlaybackProgressManager(store: store)
+    let removedSourceID = UUID()
+    let retainedSourceID = UUID()
+    let removed = try PlaybackProgress(
+        mediaID: String(repeating: "e", count: 64),
+        sourceID: removedSourceID,
+        position: 20,
+        duration: 100,
+        modifiedAt: Date()
+    )
+    let retained = try PlaybackProgress(
+        mediaID: String(repeating: "f", count: 64),
+        sourceID: retainedSourceID,
+        position: 30,
+        duration: 100,
+        modifiedAt: Date()
+    )
+    try await store.replaceAll([removed, retained])
+
+    let snapshot = try await manager.snapshotPersistently(sourceID: removedSourceID)
+    try await manager.removePersistently(sourceID: removedSourceID)
+    #expect(try await store.load() == [retained])
+
+    try await manager.restorePersistently(snapshot, sourceID: removedSourceID)
+    #expect(try await store.load() == [removed, retained])
+}
+
+@Test func managerStrictCleanupPropagatesStoreFailure() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try Data("blocking-file".utf8).write(to: directory)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = PlaybackProgressStore(fileURL: directory.appendingPathComponent("progress.json"))
+    let manager = PlaybackProgressManager(store: store)
+
+    await #expect(throws: (any Error).self) {
+        try await manager.removePersistently(sourceID: UUID())
+    }
+}
+
 @Test func managerDoesNotThrottleSameMediaIDAcrossSources() async throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

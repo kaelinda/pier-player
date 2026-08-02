@@ -482,6 +482,63 @@ import Testing
 }
 
 @MainActor
+@Test func progressCleanupFailurePreventsSourceRemovalAndRestoresHistory() async throws {
+    let sourceStore = SourceManagementSourceStore()
+    let credentialStore = SourceManagementCredentialStore()
+    let historyStore = SourceManagementHistoryStore()
+    let progressManager = SourceManagementProgressManager()
+    let factory = SourceManagementSourceFactory()
+    let model = AppModel(
+        credentialStore: credentialStore,
+        sourceStore: sourceStore,
+        sourceFactory: factory.makeSource,
+        progressManager: progressManager,
+        historyStore: historyStore
+    )
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    let entry = try sourceManagementHistoryEntry(sourceID: sourceID)
+    try await historyStore.upsert(entry)
+    await progressManager.failNextPersistentRemove()
+
+    await #expect(throws: SMBSourceRemovalError.changesNotSaved) {
+        try await model.removeSource(id: sourceID)
+    }
+
+    #expect(model.source(id: sourceID) != nil)
+    #expect(try await historyStore.load() == [entry])
+    #expect(await credentialStore.load(sourceID: sourceID) != nil)
+}
+
+@MainActor
+@Test func progressCompensationFailureIsReported() async throws {
+    let sourceStore = SourceManagementSourceStore()
+    let credentialStore = SourceManagementCredentialStore()
+    let historyStore = SourceManagementHistoryStore()
+    let progressManager = SourceManagementProgressManager()
+    let factory = SourceManagementSourceFactory()
+    let model = AppModel(
+        credentialStore: credentialStore,
+        sourceStore: sourceStore,
+        sourceFactory: factory.makeSource,
+        progressManager: progressManager,
+        historyStore: historyStore
+    )
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    let entry = try sourceManagementHistoryEntry(sourceID: sourceID)
+    try await historyStore.upsert(entry)
+    await sourceStore.failNextRemove()
+    await progressManager.failNextPersistentRestore()
+
+    await #expect(throws: SMBSourceRemovalError.continuityRollbackFailed) {
+        try await model.removeSource(id: sourceID)
+    }
+
+    #expect(try await historyStore.load() == [entry])
+}
+
+@MainActor
 @Test func sourceMetadataRemovalFailureKeepsTheLiveSourceAndCredentials() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
@@ -653,8 +710,11 @@ private actor RecordingSyncCoordinator: CloudSyncCoordinating {
     }
 }
 
-private actor SourceManagementProgressManager: PlaybackProgressManaging {
+private actor SourceManagementProgressManager: PlaybackProgressCleanupManaging {
     private(set) var removedSourceIDs: [UUID] = []
+    private var progress: [PlaybackProgress] = []
+    private var shouldFailNextPersistentRemove = false
+    private var shouldFailNextPersistentRestore = false
 
     func progress(mediaID: String) -> PlaybackProgress? { nil }
     func record(
@@ -664,9 +724,42 @@ private actor SourceManagementProgressManager: PlaybackProgressManaging {
         duration: TimeInterval,
         force: Bool
     ) {}
-    func allProgress() -> [PlaybackProgress] { [] }
-    func replaceAll(_ progress: [PlaybackProgress]) {}
+    func allProgress() -> [PlaybackProgress] { progress }
+    func replaceAll(_ progress: [PlaybackProgress]) { self.progress = progress }
     func removeAll(sourceID: UUID) { removedSourceIDs.append(sourceID) }
+
+    func snapshotPersistently(sourceID: UUID) throws -> [PlaybackProgress] {
+        progress.filter { $0.sourceID == sourceID }
+    }
+
+    func removePersistently(sourceID: UUID) throws {
+        if shouldFailNextPersistentRemove {
+            shouldFailNextPersistentRemove = false
+            throw SourceManagementPersistenceError.saveFailed
+        }
+        removedSourceIDs.append(sourceID)
+        progress.removeAll { $0.sourceID == sourceID }
+    }
+
+    func restorePersistently(
+        _ snapshot: [PlaybackProgress],
+        sourceID: UUID
+    ) throws {
+        if shouldFailNextPersistentRestore {
+            shouldFailNextPersistentRestore = false
+            throw SourceManagementPersistenceError.saveFailed
+        }
+        progress.removeAll { $0.sourceID == sourceID }
+        progress.append(contentsOf: snapshot)
+    }
+
+    func failNextPersistentRemove() {
+        shouldFailNextPersistentRemove = true
+    }
+
+    func failNextPersistentRestore() {
+        shouldFailNextPersistentRestore = true
+    }
 }
 
 private actor SourceManagementHistoryStore: PlaybackHistoryStoring {
