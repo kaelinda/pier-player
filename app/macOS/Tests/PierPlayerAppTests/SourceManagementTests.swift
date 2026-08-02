@@ -421,6 +421,67 @@ import Testing
 }
 
 @MainActor
+@Test func publishingContinuityRevisionRefreshesPlaybackPresentation() {
+    let model = AppModel(historyStore: SourceManagementHistoryStore())
+
+    model.publishContinuityRevision()
+
+    #expect(model.continuityRevision == 1)
+}
+
+@MainActor
+@Test func historyCleanupFailurePreventsSourceRemoval() async throws {
+    let sourceStore = SourceManagementSourceStore()
+    let credentialStore = SourceManagementCredentialStore()
+    let historyStore = SourceManagementHistoryStore()
+    let factory = SourceManagementSourceFactory()
+    let model = AppModel(
+        credentialStore: credentialStore,
+        sourceStore: sourceStore,
+        sourceFactory: factory.makeSource,
+        historyStore: historyStore
+    )
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    await historyStore.failNextRemove()
+
+    await #expect(throws: SMBSourceRemovalError.changesNotSaved) {
+        try await model.removeSource(id: sourceID)
+    }
+
+    #expect(model.source(id: sourceID) != nil)
+    #expect(await sourceStore.load().count == 1)
+    #expect(await credentialStore.load(sourceID: sourceID) != nil)
+}
+
+@MainActor
+@Test func sourceRemovalFailureRestoresCleanedHistory() async throws {
+    let sourceStore = SourceManagementSourceStore()
+    let credentialStore = SourceManagementCredentialStore()
+    let historyStore = SourceManagementHistoryStore()
+    let factory = SourceManagementSourceFactory()
+    let model = AppModel(
+        credentialStore: credentialStore,
+        sourceStore: sourceStore,
+        sourceFactory: factory.makeSource,
+        historyStore: historyStore
+    )
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    let entry = try sourceManagementHistoryEntry(sourceID: sourceID)
+    try await historyStore.upsert(entry)
+    await sourceStore.failNextRemove()
+
+    await #expect(throws: SMBSourceRemovalError.changesNotSaved) {
+        try await model.removeSource(id: sourceID)
+    }
+
+    let restoredHistory = try await historyStore.load()
+    #expect(await historyStore.removedSourceIDs == [sourceID])
+    #expect(restoredHistory == [entry])
+}
+
+@MainActor
 @Test func sourceMetadataRemovalFailureKeepsTheLiveSourceAndCredentials() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
@@ -519,6 +580,7 @@ private func updateExistingSource(id: UUID, in model: AppModel) async throws {
 private final class SourceManagementModelFixture {
     let sourceStore = SourceManagementSourceStore()
     let credentialStore = SourceManagementCredentialStore()
+    let historyStore = SourceManagementHistoryStore()
     let factory = SourceManagementSourceFactory()
     let model: AppModel
 
@@ -526,7 +588,8 @@ private final class SourceManagementModelFixture {
         model = AppModel(
             credentialStore: credentialStore,
             sourceStore: sourceStore,
-            sourceFactory: factory.makeSource
+            sourceFactory: factory.makeSource,
+            historyStore: historyStore
         )
     }
 
@@ -608,10 +671,40 @@ private actor SourceManagementProgressManager: PlaybackProgressManaging {
 
 private actor SourceManagementHistoryStore: PlaybackHistoryStoring {
     private(set) var removedSourceIDs: [UUID] = []
+    private var entries: [PlaybackHistoryEntry] = []
+    private var shouldFailNextRemove = false
 
-    func upsert(_ entry: PlaybackHistoryEntry) throws {}
-    func load() throws -> [PlaybackHistoryEntry] { [] }
-    func removeAll(sourceID: UUID) throws { removedSourceIDs.append(sourceID) }
+    func upsert(_ entry: PlaybackHistoryEntry) throws {
+        entries.removeAll { $0.mediaID == entry.mediaID }
+        entries.append(entry)
+    }
+
+    func load() throws -> [PlaybackHistoryEntry] { entries }
+
+    func removeAll(sourceID: UUID) throws {
+        if shouldFailNextRemove {
+            shouldFailNextRemove = false
+            throw SourceManagementPersistenceError.saveFailed
+        }
+        removedSourceIDs.append(sourceID)
+        entries.removeAll { $0.sourceID == sourceID }
+    }
+
+    func failNextRemove() {
+        shouldFailNextRemove = true
+    }
+}
+
+private func sourceManagementHistoryEntry(sourceID: UUID) throws -> PlaybackHistoryEntry {
+    try PlaybackHistoryEntry(
+        mediaID: String(repeating: "a", count: 64),
+        sourceID: sourceID,
+        sourceDisplayName: "Home NAS",
+        fileName: "Movie.mkv",
+        path: "/Movies/Movie.mkv",
+        size: 1024,
+        modifiedAt: nil
+    )
 }
 
 private actor SourceManagementSourceStore: SMBSourceStoring {

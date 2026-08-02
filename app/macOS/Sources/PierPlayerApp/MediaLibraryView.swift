@@ -170,7 +170,10 @@ struct MediaLibraryView: View {
                 diagnosticRecorder: diagnostics.recorder,
                 diagnosticContext: diagnostics.context,
                 identityProvider: diagnostics.identityProvider,
-                progressManager: diagnostics.progressManager
+                progressManager: diagnostics.progressManager,
+                historyStore: diagnostics.historyStore,
+                sourceDisplayName: selection.source.displayName,
+                onStopped: model.publishContinuityRevision
             )
         }
     }

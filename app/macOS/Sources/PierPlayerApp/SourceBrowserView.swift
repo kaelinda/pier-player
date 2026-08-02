@@ -48,7 +48,10 @@ struct SourceBrowserView: View {
                     diagnosticRecorder: diagnostics.recorder,
                     diagnosticContext: diagnostics.context,
                     identityProvider: diagnostics.identityProvider,
-                    progressManager: diagnostics.progressManager
+                    progressManager: diagnostics.progressManager,
+                    historyStore: diagnostics.historyStore,
+                    sourceDisplayName: connectedSource.displayName,
+                    onStopped: model.publishContinuityRevision
                 )
             }
         }

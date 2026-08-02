@@ -8,6 +8,7 @@ struct VideoPlayerSheet: View {
     let item: MediaSourceItem
     @StateObject private var playerModel: VideoPlayerModel
     @Environment(\.dismiss) private var dismiss
+    private let onStopped: @MainActor @Sendable () -> Void
 
     @MainActor
     init(
@@ -18,9 +19,11 @@ struct VideoPlayerSheet: View {
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
         progressManager: (any PlaybackProgressManaging)? = nil,
         historyStore: (any PlaybackHistoryStoring)? = nil,
-        sourceDisplayName: String? = nil
+        sourceDisplayName: String? = nil,
+        onStopped: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.item = item
+        self.onStopped = onStopped
         _playerModel = StateObject(
             wrappedValue: VideoPlayerModel(
                 item: item,
@@ -35,8 +38,13 @@ struct VideoPlayerSheet: View {
         )
     }
 
-    init(item: MediaSourceItem, playerModel: VideoPlayerModel) {
+    init(
+        item: MediaSourceItem,
+        playerModel: VideoPlayerModel,
+        onStopped: @escaping @MainActor @Sendable () -> Void = {}
+    ) {
         self.item = item
+        self.onStopped = onStopped
         _playerModel = StateObject(wrappedValue: playerModel)
     }
 
@@ -58,7 +66,10 @@ struct VideoPlayerSheet: View {
             await playerModel.start()
         }
         .onDisappear {
-            Task { await playerModel.stop() }
+            Task {
+                await playerModel.stop()
+                onStopped()
+            }
         }
         .onChange(of: playerModel.snapshot.failure) { _, failure in
             guard let failure else { return }

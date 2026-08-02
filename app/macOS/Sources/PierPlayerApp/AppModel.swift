@@ -14,6 +14,7 @@ enum SMBSourceRemovalError: Error, Equatable {
     case changesNotSaved
     case sourceNotFound
     case credentialRollbackFailed
+    case continuityRollbackFailed
 }
 
 @MainActor
@@ -492,14 +493,32 @@ final class AppModel: ObservableObject {
             throw SMBSourceRemovalError.changesNotSaved
         }
 
+        let storedProgress = await progressManager?.allProgress().filter { $0.sourceID == id } ?? []
+        let storedHistory: [PlaybackHistoryEntry]
+        do {
+            storedHistory = try await historyStore?.load().filter { $0.sourceID == id } ?? []
+            try await historyStore?.removeAll(sourceID: id)
+        } catch {
+            throw SMBSourceRemovalError.changesNotSaved
+        }
+        await progressManager?.removeAll(sourceID: id)
+
         do {
             try await credentialStore.delete(sourceID: id)
         } catch {
+            guard await restoreContinuity(
+                sourceID: id,
+                progress: storedProgress,
+                history: storedHistory
+            ) else {
+                throw SMBSourceRemovalError.continuityRollbackFailed
+            }
             throw SMBSourceRemovalError.changesNotSaved
         }
         do {
             try await sourceStore.remove(id: id)
         } catch {
+            var credentialRollbackFailed = false
             if let storedCredential {
                 do {
                     try await credentialStore.save(
@@ -508,8 +527,18 @@ final class AppModel: ObservableObject {
                         domain: storedCredential.domain
                     )
                 } catch {
-                    throw SMBSourceRemovalError.credentialRollbackFailed
+                    credentialRollbackFailed = true
                 }
+            }
+            guard await restoreContinuity(
+                sourceID: id,
+                progress: storedProgress,
+                history: storedHistory
+            ) else {
+                throw SMBSourceRemovalError.continuityRollbackFailed
+            }
+            if credentialRollbackFailed {
+                throw SMBSourceRemovalError.credentialRollbackFailed
             }
             throw SMBSourceRemovalError.changesNotSaved
         }
@@ -519,8 +548,6 @@ final class AppModel: ObservableObject {
             await source.source.disconnect()
         }
         configuredSources.removeAll { $0.id == id }
-        await progressManager?.removeAll(sourceID: id)
-        try? await historyStore?.removeAll(sourceID: id)
         await syncCoordinator?.enqueue(.deleteSource(id: id, modifiedAt: Date()))
         sourceRevision &+= 1
         continuityRevision &+= 1
@@ -547,6 +574,30 @@ final class AppModel: ObservableObject {
             progressManager: progressManager,
             historyStore: historyStore
         )
+    }
+
+    func publishContinuityRevision() {
+        continuityRevision &+= 1
+    }
+
+    private func restoreContinuity(
+        sourceID: UUID,
+        progress: [PlaybackProgress],
+        history: [PlaybackHistoryEntry]
+    ) async -> Bool {
+        if let progressManager {
+            let current = await progressManager.allProgress()
+            let restored = current.filter { $0.sourceID != sourceID } + progress
+            await progressManager.replaceAll(restored)
+        }
+        do {
+            for entry in history {
+                try await historyStore?.upsert(entry)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     var mediaLibrarySources: [MediaLibrarySource] {
@@ -685,6 +736,8 @@ final class AppModel: ObservableObject {
             "The source could not be removed because its saved configuration is missing."
         case SMBSourceRemovalError.credentialRollbackFailed:
             "The source was not removed, and its saved credentials could not be restored."
+        case SMBSourceRemovalError.continuityRollbackFailed:
+            "The source was not removed, and its playback history could not be restored."
         default:
             "The SMB source could not be connected."
         }
