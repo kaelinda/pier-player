@@ -16,7 +16,9 @@ struct VideoPlayerSheet: View {
         diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
         diagnosticContext: DiagnosticContext? = nil,
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
-        progressManager: (any PlaybackProgressManaging)? = nil
+        progressManager: (any PlaybackProgressManaging)? = nil,
+        historyStore: (any PlaybackHistoryStoring)? = nil,
+        sourceDisplayName: String? = nil
     ) {
         self.item = item
         _playerModel = StateObject(
@@ -26,7 +28,9 @@ struct VideoPlayerSheet: View {
                 diagnosticRecorder: diagnosticRecorder,
                 diagnosticContext: diagnosticContext,
                 identityProvider: identityProvider,
-                progressManager: progressManager
+                progressManager: progressManager,
+                historyStore: historyStore,
+                sourceDisplayName: sourceDisplayName
             )
         )
     }

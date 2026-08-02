@@ -44,11 +44,16 @@ final class VideoPlayerModel: ObservableObject {
     private let diagnosticContext: DiagnosticContext
     private let identityProvider: (any DiagnosticIdentityProviding)?
     private let progressManager: (any PlaybackProgressManaging)?
+    private let historyStore: (any PlaybackHistoryStoring)?
+    private let sourceDisplayName: String
     private var snapshotTask: Task<Void, Never>?
     private var progressTask: Task<Void, Never>?
     private var hasStarted = false
+    private var activeSessionID: UUID?
     private var activeMediaID: String?
     private var canPersistProgress = false
+    private var terminalFlushTask: Task<Void, Never>?
+    private var terminalFlushSessionID: UUID?
 
     init(
         item: MediaSourceItem,
@@ -58,7 +63,9 @@ final class VideoPlayerModel: ObservableObject {
         diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
         diagnosticContext: DiagnosticContext? = nil,
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
-        progressManager: (any PlaybackProgressManaging)? = nil
+        progressManager: (any PlaybackProgressManaging)? = nil,
+        historyStore: (any PlaybackHistoryStoring)? = nil,
+        sourceDisplayName: String? = nil
     ) {
         let renderer = renderer ?? SampleBufferRenderer()
         let diagnosticContext = diagnosticContext ?? DiagnosticContext(
@@ -73,6 +80,8 @@ final class VideoPlayerModel: ObservableObject {
         self.diagnosticContext = diagnosticContext
         self.identityProvider = identityProvider
         self.progressManager = progressManager
+        self.historyStore = historyStore
+        self.sourceDisplayName = sourceDisplayName ?? source.displayName
         self.coordinator = coordinator ?? PlaybackCoordinator(
             renderer: renderer,
             diagnosticRecorder: diagnosticRecorder,
@@ -103,13 +112,17 @@ final class VideoPlayerModel: ObservableObject {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
+        let sessionID = UUID()
+        activeSessionID = sessionID
+        terminalFlushTask = nil
+        terminalFlushSessionID = nil
         consumeSnapshots()
         updateProgress()
 
-        await openAndStartPlayback()
+        await openAndStartPlayback(sessionID: sessionID)
     }
 
-    private func openAndStartPlayback() async {
+    private func openAndStartPlayback(sessionID: UUID) async {
         do {
             let file = try await openPlaybackFile(
                 source: source,
@@ -118,15 +131,11 @@ final class VideoPlayerModel: ObservableObject {
                 context: diagnosticContext,
                 identityProvider: identityProvider
             )
-            guard hasStarted, !Task.isCancelled else {
+            guard isActive(sessionID) else {
                 await file.close()
-                if hasStarted {
-                    await stop()
-                }
                 return
             }
-            activeMediaID = MediaSyncIdentity.make(from: file.identity)
-            canPersistProgress = false
+            let identity = file.identity
             try await coordinator.start(
                 file: file,
                 reopenFile: { [
@@ -145,24 +154,49 @@ final class VideoPlayerModel: ObservableObject {
                     )
                 }
             )
-            await restoreProgressIfAvailable()
-            canPersistProgress = true
-            if snapshot.state == .ended {
-                await persistProgress(force: true)
+            guard isActive(sessionID) else { return }
+            activeMediaID = MediaSyncIdentity.make(from: identity)
+            canPersistProgress = false
+            await recordPlaybackHistory(identity: identity)
+            guard isActive(sessionID) else { return }
+            if isTerminal(snapshot.state) {
+                canPersistProgress = true
+                scheduleTerminalFlush()
+                await terminalFlushTask?.value
+                return
             }
-            await discoverExternalSubtitles()
+            await restoreProgressIfAvailable(sessionID: sessionID)
+            guard isActive(sessionID) else { return }
+            canPersistProgress = true
+            if isTerminal(snapshot.state) {
+                scheduleTerminalFlush()
+                await terminalFlushTask?.value
+                return
+            }
+            guard isActive(sessionID) else { return }
+            await discoverExternalSubtitles(sessionID: sessionID)
         } catch is CancellationError {
-            await stop()
+            if isActive(sessionID) {
+                await stop()
+            }
         } catch {
+            guard isActive(sessionID) else { return }
             await coordinator.stop()
-            publishFailure(error)
+            guard isActive(sessionID) else { return }
+            await publishFailure(error)
         }
     }
 
     func stop() async {
-        guard hasStarted else { return }
-        await persistProgress(force: true)
+        guard hasStarted, let sessionID = activeSessionID else { return }
         hasStarted = false
+        if terminalFlushSessionID == sessionID, let terminalFlushTask {
+            await terminalFlushTask.value
+        } else {
+            await persistProgress(force: true, sessionID: sessionID)
+        }
+        guard activeSessionID == sessionID else { return }
+        activeSessionID = nil
         let snapshotTask = self.snapshotTask
         let progressTask = self.progressTask
         self.snapshotTask = nil
@@ -174,16 +208,29 @@ final class VideoPlayerModel: ObservableObject {
         await coordinator.stop()
         activeMediaID = nil
         canPersistProgress = false
+        terminalFlushTask = nil
+        terminalFlushSessionID = nil
         snapshot = .idle
         timelinePosition = 0
+    }
+
+    func forcePersistProgress() async {
+        guard let sessionID = activeSessionID else { return }
+        await persistProgress(force: true, sessionID: sessionID)
     }
 
     func retry() async {
         guard hasStarted, case .failed = snapshot.state else { return }
         await coordinator.stop()
+        canPersistProgress = false
+        activeMediaID = nil
+        let sessionID = UUID()
+        activeSessionID = sessionID
+        terminalFlushTask = nil
+        terminalFlushSessionID = nil
         snapshot = .idle
         timelinePosition = 0
-        await openAndStartPlayback()
+        await openAndStartPlayback(sessionID: sessionID)
     }
 
     func togglePlayback() async {
@@ -195,7 +242,7 @@ final class VideoPlayerModel: ObservableObject {
                 try await coordinator.resume()
             }
         } catch {
-            publishFailure(error)
+            await publishFailure(error)
         }
     }
 
@@ -212,12 +259,15 @@ final class VideoPlayerModel: ObservableObject {
     func endScrubbing() async {
         guard isScrubbing else { return }
         let target = scrubPosition
+        let acceptedPosition = timelinePosition
         isScrubbing = false
-        timelinePosition = target
         do {
             _ = try await coordinator.seek(to: target)
+            timelinePosition = target
+            await persistProgress(force: true)
         } catch {
-            publishFailure(error)
+            timelinePosition = acceptedPosition
+            await publishFailure(error)
         }
     }
 
@@ -225,7 +275,7 @@ final class VideoPlayerModel: ObservableObject {
         do {
             _ = try await coordinator.selectAudioTrack(index: index)
         } catch {
-            publishFailure(error)
+            await publishFailure(error)
         }
     }
 
@@ -233,7 +283,7 @@ final class VideoPlayerModel: ObservableObject {
         do {
             try await coordinator.selectSubtitleTrack(index: index)
         } catch {
-            publishFailure(error)
+            await publishFailure(error)
         }
     }
 
@@ -261,11 +311,11 @@ final class VideoPlayerModel: ObservableObject {
         }
     }
 
-    private func discoverExternalSubtitles() async {
+    private func discoverExternalSubtitles(sessionID: UUID) async {
         let parent = (item.path as NSString).deletingLastPathComponent
         let directory = parent.isEmpty ? "/" : parent
         guard let items = try? await source.list(directory: directory),
-              hasStarted, !Task.isCancelled else {
+              isActive(sessionID) else {
             return
         }
         let candidates = ExternalSubtitleDiscovery.discover(
@@ -274,11 +324,13 @@ final class VideoPlayerModel: ObservableObject {
         )
         var subtitles: [ExternalPlaybackSubtitle] = []
         for candidate in candidates {
-            guard hasStarted, !Task.isCancelled else { return }
-            guard let result = try? await ExternalSubtitleDiscovery.load(
+            guard isActive(sessionID) else { return }
+            let result = try? await ExternalSubtitleDiscovery.load(
                 candidate,
                 from: source
-            ) else {
+            )
+            guard isActive(sessionID) else { return }
+            guard let result else {
                 continue
             }
             subtitles.append(
@@ -291,7 +343,7 @@ final class VideoPlayerModel: ObservableObject {
                 )
             )
         }
-        guard hasStarted, !Task.isCancelled else { return }
+        guard isActive(sessionID) else { return }
         await coordinator.registerExternalSubtitles(subtitles)
     }
 
@@ -309,22 +361,29 @@ final class VideoPlayerModel: ObservableObject {
     }
 
     private func receive(_ snapshot: PlaybackCoordinatorSnapshot) {
+        guard hasStarted else { return }
         self.snapshot = snapshot
         if !isScrubbing {
             timelinePosition = snapshot.position
         }
-        if snapshot.state == .ended {
-            Task { [weak self] in await self?.persistProgress(force: true) }
+        switch snapshot.state {
+        case .ended, .failed:
+            scheduleTerminalFlush()
+        default:
+            break
         }
     }
 
-    private func restoreProgressIfAvailable() async {
+    private func restoreProgressIfAvailable(sessionID: UUID) async {
         guard let activeMediaID,
               let progressManager,
               let progress = await progressManager.progress(mediaID: activeMediaID),
+              isActive(sessionID),
+              !isTerminal(snapshot.state),
               progress.effectiveResumePosition > 0 else { return }
         do {
             _ = try await coordinator.seek(to: progress.effectiveResumePosition)
+            guard isActive(sessionID) else { return }
             timelinePosition = progress.effectiveResumePosition
         } catch {
             return
@@ -332,7 +391,17 @@ final class VideoPlayerModel: ObservableObject {
     }
 
     private func persistProgress(force: Bool) async {
-        guard canPersistProgress, let activeMediaID, let progressManager else { return }
+        guard let sessionID = activeSessionID else { return }
+        await persistProgress(force: force, sessionID: sessionID)
+    }
+
+    private func persistProgress(force: Bool, sessionID: UUID) async {
+        guard activeSessionID == sessionID,
+              canPersistProgress,
+              let activeMediaID,
+              let progressManager,
+              snapshot.duration.isFinite,
+              snapshot.duration > 0 else { return }
         await progressManager.record(
             mediaID: activeMediaID,
             sourceID: source.id,
@@ -342,12 +411,52 @@ final class VideoPlayerModel: ObservableObject {
         )
     }
 
+    private func scheduleTerminalFlush() {
+        guard let sessionID = activeSessionID,
+              canPersistProgress,
+              activeMediaID != nil,
+              snapshot.duration.isFinite,
+              snapshot.duration > 0 else { return }
+        if terminalFlushSessionID == sessionID, terminalFlushTask != nil { return }
+        terminalFlushSessionID = sessionID
+        terminalFlushTask = Task { [weak self] in
+            await self?.persistProgress(force: true, sessionID: sessionID)
+        }
+    }
+
+    private func isActive(_ sessionID: UUID) -> Bool {
+        hasStarted && activeSessionID == sessionID && !Task.isCancelled
+    }
+
+    private func isTerminal(_ state: PlaybackState) -> Bool {
+        switch state {
+        case .ended, .failed:
+            true
+        default:
+            false
+        }
+    }
+
+    private func recordPlaybackHistory(identity: MediaFileIdentity) async {
+        guard let historyStore,
+              let entry = try? PlaybackHistoryEntry(
+                  mediaID: MediaSyncIdentity.make(from: identity),
+                  sourceID: identity.sourceID,
+                  sourceDisplayName: sourceDisplayName,
+                  fileName: item.name,
+                  path: identity.path,
+                  size: identity.size,
+                  modifiedAt: identity.modifiedAt
+              ) else { return }
+        try? await historyStore.upsert(entry)
+    }
+
     private func clamped(_ position: TimeInterval) -> TimeInterval {
         guard position.isFinite else { return 0 }
         return min(max(position, 0), max(snapshot.duration, 0))
     }
 
-    private func publishFailure(_ error: Error) {
+    private func publishFailure(_ error: Error) async {
         let failure = PlaybackFailure.classify(error, defaultBoundary: .sourceOpen)
         snapshot = PlaybackCoordinatorSnapshot(
             sessionID: snapshot.sessionID,
@@ -361,6 +470,13 @@ final class VideoPlayerModel: ObservableObject {
             subtitleText: snapshot.subtitleText,
             failure: failure
         )
+        if canPersistProgress,
+           activeMediaID != nil,
+           snapshot.duration.isFinite,
+           snapshot.duration > 0 {
+            scheduleTerminalFlush()
+            await terminalFlushTask?.value
+        }
     }
 }
 

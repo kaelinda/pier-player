@@ -1,4 +1,5 @@
 import Foundation
+import CloudSyncKit
 import MediaSourceKit
 import Testing
 
@@ -221,6 +222,276 @@ struct MediaLibraryPresentationTests {
             #expect((0..<MediaLibraryPresentation.symbolCount).contains(first.symbolIndex))
         }
     }
+
+    @Test func projectionJoinsScannedMediaHistoryAndProgressByMediaIdentity() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let scanned = item(
+            name: "Arrival.mkv",
+            path: "/Movies/Arrival.mkv",
+            sourceID: sourceID,
+            sourceName: "Current NAS",
+            size: 1_024,
+            modifiedAt: date(100)
+        )
+        let mediaID = mediaID(for: scanned)
+        let history = try historyEntry(
+            mediaID: mediaID,
+            item: scanned,
+            sourceDisplayName: "Old NAS",
+            lastPlayedAt: date(200)
+        )
+        let progress = try playbackProgress(
+            mediaID: mediaID,
+            sourceID: sourceID,
+            position: 40,
+            duration: 100,
+            modifiedAt: date(300)
+        )
+
+        let result = MediaLibraryPresentation.project(
+            scannedItems: [scanned],
+            history: [history],
+            progress: [progress],
+            configuredSourceIDs: [sourceID],
+            connectedSourceIDs: [sourceID]
+        )
+
+        #expect(result.allVideos.count == 1)
+        #expect(result.allVideos[0].mediaID == mediaID)
+        #expect(result.allVideos[0].item.sourceName == "Current NAS")
+        #expect(result.allVideos[0].lastPlayedAt == date(200))
+        #expect(result.allVideos[0].effectiveResumePosition == 40)
+        #expect(result.allVideos[0].progressRatio == 0.4)
+        #expect(result.allVideos[0].isAvailable)
+    }
+
+    @Test func projectionKeepsConfiguredDisconnectedHistoryUnavailable() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let historicalItem = item(
+            name: "Moon.mp4",
+            path: "/Movies/Moon.mp4",
+            sourceID: sourceID,
+            sourceName: "Bedroom NAS",
+            size: 2_048,
+            modifiedAt: date(100)
+        )
+        let mediaID = mediaID(for: historicalItem)
+        let history = try historyEntry(
+            mediaID: mediaID,
+            item: historicalItem,
+            lastPlayedAt: date(200)
+        )
+        let progress = try playbackProgress(
+            mediaID: mediaID,
+            sourceID: sourceID,
+            position: 25,
+            duration: 100,
+            modifiedAt: date(300)
+        )
+
+        let result = MediaLibraryPresentation.project(
+            scannedItems: [],
+            history: [history],
+            progress: [progress],
+            configuredSourceIDs: [sourceID],
+            connectedSourceIDs: []
+        )
+
+        #expect(result.allVideos.map(\.item) == [historicalItem])
+        #expect(result.continueWatching.map(\.mediaID) == [mediaID])
+        #expect(result.allVideos[0].isAvailable == false)
+    }
+
+    @Test func projectionDropsHistoryForSourcesNoLongerConfigured() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let historicalItem = item(
+            name: "Removed.mp4",
+            path: "/Removed.mp4",
+            sourceID: sourceID,
+            size: 100
+        )
+        let history = try historyEntry(
+            mediaID: mediaID(for: historicalItem),
+            item: historicalItem,
+            lastPlayedAt: date(200)
+        )
+
+        let result = MediaLibraryPresentation.project(
+            scannedItems: [],
+            history: [history],
+            progress: [],
+            configuredSourceIDs: [],
+            connectedSourceIDs: []
+        )
+
+        #expect(result.allVideos.isEmpty)
+        #expect(result.recentlyPlayed.isEmpty)
+    }
+
+    @Test func changedFileIdentityDoesNotInheritOldProgress() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let oldItem = item(
+            name: "Movie.mkv",
+            path: "/Movie.mkv",
+            sourceID: sourceID,
+            size: 100,
+            modifiedAt: date(100)
+        )
+        let changedItem = item(
+            name: "Movie.mkv",
+            path: "/Movie.mkv",
+            sourceID: sourceID,
+            size: 200,
+            modifiedAt: date(200)
+        )
+        let oldMediaID = mediaID(for: oldItem)
+        let history = try historyEntry(
+            mediaID: oldMediaID,
+            item: oldItem,
+            lastPlayedAt: date(300)
+        )
+        let oldProgress = try playbackProgress(
+            mediaID: oldMediaID,
+            sourceID: sourceID,
+            position: 50,
+            duration: 100,
+            modifiedAt: date(400)
+        )
+
+        let result = MediaLibraryPresentation.project(
+            scannedItems: [changedItem],
+            history: [history],
+            progress: [oldProgress],
+            configuredSourceIDs: [sourceID],
+            connectedSourceIDs: [sourceID]
+        )
+        let changedProjection = try #require(
+            result.allVideos.first { $0.item.media.size == 200 }
+        )
+
+        #expect(changedProjection.mediaID == mediaID(for: changedItem))
+        #expect(changedProjection.effectiveResumePosition == 0)
+        #expect(changedProjection.progressRatio == 0)
+        #expect(changedProjection.isCompleted == false)
+    }
+
+    @Test func scannedItemsWithoutSizeRemainVisibleButCannotJoinProgress() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let scanned = item(
+            name: "Unknown.mp4",
+            path: "/Unknown.mp4",
+            sourceID: sourceID,
+            size: nil
+        )
+        let unrelatedProgress = try playbackProgress(
+            mediaID: String(repeating: "a", count: 64),
+            sourceID: sourceID,
+            position: 50,
+            duration: 100,
+            modifiedAt: date(100)
+        )
+
+        let result = MediaLibraryPresentation.project(
+            scannedItems: [scanned],
+            history: [],
+            progress: [unrelatedProgress],
+            configuredSourceIDs: [sourceID],
+            connectedSourceIDs: [sourceID]
+        )
+
+        #expect(result.allVideos.count == 1)
+        #expect(result.allVideos[0].mediaID == nil)
+        #expect(result.allVideos[0].progressRatio == 0)
+        #expect(result.continueWatching.isEmpty)
+    }
+
+    @Test func continueWatchingUsesResumeEligibilityNewestProgressAndStableTies() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let candidates = try (0..<15).map { index in
+            let item = item(
+                name: "Video-\(index).mp4",
+                path: "/Video-\(index).mp4",
+                sourceID: sourceID,
+                size: Int64(1_000 + index)
+            )
+            let mediaID = mediaID(for: item)
+            return (
+                item,
+                try historyEntry(
+                    mediaID: mediaID,
+                    item: item,
+                    lastPlayedAt: date(TimeInterval(index))
+                ),
+                try playbackProgress(
+                    mediaID: mediaID,
+                    sourceID: sourceID,
+                    position: 10,
+                    duration: 100,
+                    modifiedAt: date(TimeInterval(index))
+                )
+            )
+        }
+        let completed = try completedProjectionInput(sourceID: sourceID)
+        let tooEarly = try earlyProjectionInput(sourceID: sourceID)
+
+        let result = MediaLibraryPresentation.project(
+            scannedItems: candidates.map(\.0) + [completed.item, tooEarly.item],
+            history: candidates.map(\.1) + [completed.history, tooEarly.history],
+            progress: candidates.map(\.2)
+                + [completed.progress, tooEarly.progress].compactMap { $0 },
+            configuredSourceIDs: [sourceID],
+            connectedSourceIDs: [sourceID]
+        )
+
+        #expect(result.continueWatching.count == 12)
+        #expect(result.continueWatching.first?.item.media.name == "Video-14.mp4")
+        #expect(result.continueWatching.last?.item.media.name == "Video-3.mp4")
+        #expect(result.continueWatching.allSatisfy { $0.effectiveResumePosition > 0 })
+
+        let tied = try stableTieProjection(sourceID: sourceID)
+        let tiedMediaIDs = tied.continueWatching.compactMap(\.mediaID)
+        #expect(tiedMediaIDs == tiedMediaIDs.sorted())
+    }
+
+    @Test func recentlyPlayedExcludesContinueWatchingAndIncludesCompleted() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let active = try projectionInput(
+            name: "Active.mp4",
+            sourceID: sourceID,
+            position: 20,
+            isCompleted: false,
+            lastPlayedAt: date(100)
+        )
+        let completed = try projectionInput(
+            name: "Completed.mp4",
+            sourceID: sourceID,
+            position: 100,
+            isCompleted: true,
+            lastPlayedAt: date(300)
+        )
+        let noProgress = try projectionInput(
+            name: "NoProgress.mp4",
+            sourceID: sourceID,
+            progress: false,
+            lastPlayedAt: date(200)
+        )
+
+        let result = MediaLibraryPresentation.project(
+            scannedItems: [active.item, completed.item, noProgress.item],
+            history: [active.history, completed.history, noProgress.history],
+            progress: [active.progress, completed.progress].compactMap { $0 },
+            configuredSourceIDs: [sourceID],
+            connectedSourceIDs: [sourceID]
+        )
+
+        #expect(result.continueWatching.map(\.item.media.name) == ["Active.mp4"])
+        #expect(
+            result.recentlyPlayed.map(\.item.media.name)
+                == ["Completed.mp4", "NoProgress.mp4"]
+        )
+        #expect(result.recentlyPlayed.first?.isCompleted == true)
+        #expect(result.recentlyPlayed.first?.isWatched == true)
+    }
 }
 
 private func item(
@@ -228,6 +499,7 @@ private func item(
     path: String,
     sourceID: UUID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
     sourceName: String = "NAS",
+    size: Int64? = nil,
     modifiedAt: Date? = nil
 ) -> MediaLibraryItem {
     MediaLibraryItem(
@@ -237,9 +509,134 @@ private func item(
             name: name,
             path: path,
             kind: .file,
-            size: nil,
+            size: size,
             modifiedAt: modifiedAt
         )
+    )
+}
+
+private func mediaID(for item: MediaLibraryItem) -> String {
+    MediaSyncIdentity.make(
+        from: MediaFileIdentity(
+            sourceID: item.sourceID,
+            path: item.media.path,
+            size: item.media.size!,
+            modifiedAt: item.media.modifiedAt
+        )
+    )
+}
+
+private func historyEntry(
+    mediaID: String,
+    item: MediaLibraryItem,
+    sourceDisplayName: String? = nil,
+    lastPlayedAt: Date
+) throws -> PlaybackHistoryEntry {
+    try PlaybackHistoryEntry(
+        mediaID: mediaID,
+        sourceID: item.sourceID,
+        sourceDisplayName: sourceDisplayName ?? item.sourceName,
+        fileName: item.media.name,
+        path: item.media.path,
+        size: item.media.size!,
+        modifiedAt: item.media.modifiedAt,
+        lastPlayedAt: lastPlayedAt
+    )
+}
+
+private func playbackProgress(
+    mediaID: String,
+    sourceID: UUID,
+    position: TimeInterval,
+    duration: TimeInterval,
+    modifiedAt: Date,
+    isCompleted: Bool? = nil
+) throws -> PlaybackProgress {
+    try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: position,
+        duration: duration,
+        modifiedAt: modifiedAt,
+        isCompleted: isCompleted
+    )
+}
+
+private typealias ProjectionInput = (
+    item: MediaLibraryItem,
+    history: PlaybackHistoryEntry,
+    progress: PlaybackProgress?
+)
+
+private func projectionInput(
+    name: String,
+    sourceID: UUID,
+    position: TimeInterval = 0,
+    isCompleted: Bool = false,
+    progress includesProgress: Bool = true,
+    lastPlayedAt: Date
+) throws -> ProjectionInput {
+    let item = item(
+        name: name,
+        path: "/\(name)",
+        sourceID: sourceID,
+        size: Int64(abs(name.hashValue)) + 1
+    )
+    let mediaID = mediaID(for: item)
+    return (
+        item,
+        try historyEntry(mediaID: mediaID, item: item, lastPlayedAt: lastPlayedAt),
+        includesProgress
+            ? try playbackProgress(
+                mediaID: mediaID,
+                sourceID: sourceID,
+                position: position,
+                duration: 100,
+                modifiedAt: lastPlayedAt,
+                isCompleted: isCompleted
+            )
+            : nil
+    )
+}
+
+private func completedProjectionInput(sourceID: UUID) throws -> ProjectionInput {
+    try projectionInput(
+        name: "Completed.mp4",
+        sourceID: sourceID,
+        position: 100,
+        isCompleted: true,
+        lastPlayedAt: date(1_000)
+    )
+}
+
+private func earlyProjectionInput(sourceID: UUID) throws -> ProjectionInput {
+    try projectionInput(
+        name: "Early.mp4",
+        sourceID: sourceID,
+        position: 4,
+        lastPlayedAt: date(1_001)
+    )
+}
+
+private func stableTieProjection(sourceID: UUID) throws -> MediaLibraryProjection {
+    let first = try projectionInput(
+        name: "A.mp4",
+        sourceID: sourceID,
+        position: 10,
+        lastPlayedAt: date(100)
+    )
+    let second = try projectionInput(
+        name: "B.mp4",
+        sourceID: sourceID,
+        position: 10,
+        lastPlayedAt: date(100)
+    )
+    return MediaLibraryPresentation.project(
+        scannedItems: [second.item, first.item],
+        history: [second.history, first.history],
+        progress: [second.progress, first.progress].compactMap { $0 },
+        configuredSourceIDs: [sourceID],
+        connectedSourceIDs: [sourceID]
     )
 }
 

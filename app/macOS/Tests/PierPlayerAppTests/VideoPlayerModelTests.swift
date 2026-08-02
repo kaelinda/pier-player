@@ -49,6 +49,286 @@ import Testing
 }
 
 @MainActor
+@Test func modelRecordsHistoryOnlyAfterPlaybackStartsSuccessfully() async throws {
+    let item = testVideoItem()
+    let file = ModelTestFile(size: 1_024)
+    let source = ModelTestSource(file: file)
+    let history = ModelPlaybackHistoryStore()
+    let model = VideoPlayerModel(
+        item: item,
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: ModelTestCoordinator(),
+        historyStore: history,
+        sourceDisplayName: "Family Library"
+    )
+
+    await model.start()
+
+    let entry = try #require(await history.entries.first)
+    #expect(entry.mediaID == MediaSyncIdentity.make(from: file.identity))
+    #expect(entry.sourceID == file.identity.sourceID)
+    #expect(entry.sourceDisplayName == "Family Library")
+    #expect(entry.fileName == item.name)
+    #expect(entry.path == file.identity.path)
+    #expect(entry.size == file.identity.size)
+    #expect(entry.modifiedAt == file.identity.modifiedAt)
+    await model.stop()
+}
+
+@MainActor
+@Test func modelDoesNotRecordHistoryWhenOpenOrStartFails() async {
+    for failure in [ModelFailure.open, .start] {
+        let history = ModelPlaybackHistoryStore()
+        let source = ModelTestSource(
+            file: ModelTestFile(size: 1_024),
+            openError: failure == .open ? failure : nil
+        )
+        let coordinator = ModelTestCoordinator(
+            startError: failure == .start ? failure : nil
+        )
+        let model = VideoPlayerModel(
+            item: testVideoItem(),
+            source: source,
+            renderer: SampleBufferRenderer(),
+            coordinator: coordinator,
+            historyStore: history,
+            sourceDisplayName: "Family Library"
+        )
+
+        await model.start()
+
+        #expect(await history.entries.isEmpty)
+        await model.stop()
+    }
+}
+
+@MainActor
+@Test func successfulSeekAndExplicitLifecycleFlushForcePersistProgress() async throws {
+    let progress = ModelProgressManager()
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+    await model.start()
+    coordinator.send(snapshot(state: .playing, position: 20, duration: 100))
+    try await waitForModel(model) { $0.position == 20 }
+
+    model.beginScrubbing()
+    model.updateScrubPosition(45)
+    await model.endScrubbing()
+
+    var records = await progress.records
+    #expect(records.last(where: \.force)?.position == 45)
+
+    coordinator.send(snapshot(state: .playing, position: 55, duration: 100))
+    try await waitForModel(model) { $0.position == 55 }
+    let forceCount = records.count(where: \.force)
+    await model.forcePersistProgress()
+    records = await progress.records
+    #expect(records.count(where: \.force) == forceCount + 1)
+    #expect(records.last(where: \.force)?.position == 55)
+    await model.stop()
+}
+
+@MainActor
+@Test func terminalPublishedFailureForcePersistsValidProgress() async throws {
+    let progress = ModelProgressManager()
+    let coordinator = ModelTestCoordinator(pauseError: ModelFailure.pause)
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+    await model.start()
+    coordinator.send(snapshot(state: .playing, position: 42, duration: 100))
+    try await waitForModel(model) { $0.position == 42 }
+
+    await model.togglePlayback()
+    try await waitForProgress(progress) { records in
+        records.contains { $0.force && $0.position == 42 }
+    }
+
+    if case .failed = model.snapshot.state {
+        // Expected terminal state.
+    } else {
+        Issue.record("Expected a failed playback state")
+    }
+    await model.stop()
+}
+
+@MainActor
+@Test func terminalCoordinatorFailureSnapshotForcePersistsValidProgress() async throws {
+    let progress = ModelProgressManager()
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+    await model.start()
+    coordinator.send(snapshot(state: .playing, position: 37, duration: 100))
+    try await waitForModel(model) { $0.position == 37 }
+
+    coordinator.send(snapshot(
+        state: .failed("decode failed"),
+        position: 37,
+        duration: 100,
+        failure: PlaybackFailure(
+            boundary: .networkRead,
+            reason: .network,
+            message: "The connection was interrupted."
+        )
+    ))
+
+    try await waitForProgress(progress) { records in
+        records.contains { $0.force && $0.position == 37 }
+    }
+    let terminalForceCount = await progress.records.count(where: \.force)
+    await model.stop()
+    #expect(await progress.records.count(where: \.force) == terminalForceCount)
+}
+
+@MainActor
+@Test func stopWhileHistoryWriteIsSuspendedDoesNotResumeStartup() async throws {
+    let file = ModelTestFile(size: 1_024)
+    let source = ModelTestSource(file: file)
+    let coordinator = ModelTestCoordinator()
+    let progress = ModelProgressManager()
+    await progress.set(try PlaybackProgress(
+        mediaID: MediaSyncIdentity.make(from: file.identity),
+        sourceID: source.id,
+        position: 30,
+        duration: 100
+    ))
+    let history = SuspendedModelHistoryStore()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress,
+        historyStore: history
+    )
+
+    let startTask = Task { await model.start() }
+    for await _ in history.upsertRequests { break }
+    await model.stop()
+    await history.releaseUpsert()
+    await startTask.value
+
+    #expect(coordinator.seekPositions.isEmpty)
+    #expect(await progress.records.isEmpty)
+    #expect(source.listedPaths.isEmpty)
+}
+
+@MainActor
+@Test func earlyFailureDuringHistoryWriteFlushesAfterPersistenceBecomesReady() async throws {
+    let source = ModelTestSource(file: ModelTestFile(size: 1_024))
+    let coordinator = ModelTestCoordinator()
+    let progress = ModelProgressManager()
+    let history = SuspendedModelHistoryStore()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress,
+        historyStore: history
+    )
+
+    let startTask = Task { await model.start() }
+    for await _ in history.upsertRequests { break }
+    coordinator.send(snapshot(
+        state: .failed("network failed"),
+        position: 33,
+        duration: 100,
+        failure: PlaybackFailure(
+            boundary: .networkRead,
+            reason: .network,
+            message: "The connection was interrupted."
+        )
+    ))
+    try await waitForModel(model) { state in
+        if case .failed = state.state { return true }
+        return false
+    }
+    await history.releaseUpsert()
+    await startTask.value
+    await model.stop()
+
+    let forced = await progress.records.filter(\.force)
+    #expect(forced.count == 1)
+    #expect(forced.first?.position == 33)
+    #expect(source.listedPaths.isEmpty)
+}
+
+@MainActor
+@Test func stopWhileProgressRestoreIsSuspendedDoesNotSeekOrContinueStartup() async throws {
+    let file = ModelTestFile(size: 1_024)
+    let source = ModelTestSource(file: file)
+    let coordinator = ModelTestCoordinator()
+    let progress = SuspendedModelProgressManager(
+        progress: try PlaybackProgress(
+            mediaID: MediaSyncIdentity.make(from: file.identity),
+            sourceID: source.id,
+            position: 30,
+            duration: 100
+        )
+    )
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+
+    let startTask = Task { await model.start() }
+    for await _ in progress.restoreRequests { break }
+    await model.stop()
+    await progress.releaseRestore()
+    await startTask.value
+
+    #expect(coordinator.seekPositions.isEmpty)
+    #expect(await progress.records.isEmpty)
+    #expect(source.listedPaths.isEmpty)
+}
+
+@MainActor
+@Test func rejectedSeekPersistsPreviouslyAcceptedPosition() async throws {
+    let progress = ModelProgressManager()
+    let coordinator = ModelTestCoordinator(seekError: ModelFailure.seek)
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+    await model.start()
+    coordinator.send(snapshot(state: .playing, position: 24, duration: 100))
+    try await waitForModel(model) { $0.position == 24 }
+
+    model.beginScrubbing()
+    model.updateScrubPosition(75)
+    await model.endScrubbing()
+
+    let forced = try #require(await progress.records.last(where: \.force))
+    #expect(forced.position == 24)
+    #expect(model.timelinePosition == 24)
+    await model.stop()
+}
+
+@MainActor
 @Test func modelDoesNotOverwriteProgressBeforeRestoringIt() async throws {
     let file = ModelTestFile(size: 1_024)
     let source = ModelTestSource(file: file)
@@ -126,7 +406,9 @@ import Testing
     try await waitForProgress(progress) { records in
         records.contains { $0.force && $0.position == 100 }
     }
+    let terminalForceCount = await progress.records.count(where: \.force)
     await model.stop()
+    #expect(await progress.records.count(where: \.force) == terminalForceCount)
 }
 
 @MainActor
@@ -449,6 +731,9 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
     let snapshots: AsyncStream<PlaybackCoordinatorSnapshot>
     private let continuation: AsyncStream<PlaybackCoordinatorSnapshot>.Continuation
     private let startDelay: Duration?
+    private let startError: Error?
+    private let pauseError: Error?
+    private let seekError: Error?
     private let lock = NSLock()
     private var state = State()
 
@@ -467,11 +752,19 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
     var seekPositions: [TimeInterval] { lock.withLock { state.seekPositions } }
     var subtitleSelections: [Int?] { lock.withLock { state.subtitleSelections } }
 
-    init(startDelay: Duration? = nil) {
+    init(
+        startDelay: Duration? = nil,
+        startError: Error? = nil,
+        pauseError: Error? = nil,
+        seekError: Error? = nil
+    ) {
         let stream = AsyncStream<PlaybackCoordinatorSnapshot>.makeStream()
         snapshots = stream.stream
         continuation = stream.continuation
         self.startDelay = startDelay
+        self.startError = startError
+        self.pauseError = pauseError
+        self.seekError = seekError
     }
 
     func send(_ snapshot: PlaybackCoordinatorSnapshot) {
@@ -482,6 +775,7 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
         file: any MediaReadableFile,
         reopenFile: @escaping MediaFileReopener
     ) async throws {
+        if let startError { throw startError }
         lock.withLock {
             state.startedIdentity = file.identity
             state.reopenFile = reopenFile
@@ -498,10 +792,13 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
         return try await reopenFile()
     }
 
-    func pause() async throws {}
+    func pause() async throws {
+        if let pauseError { throw pauseError }
+    }
     func resume() async throws {}
 
     func seek(to position: TimeInterval) async throws -> UInt64 {
+        if let seekError { throw seekError }
         lock.withLock { state.seekPositions.append(position) }
         return 1
     }
@@ -517,6 +814,99 @@ final class ModelTestCoordinator: PlaybackCoordinatorControlling, @unchecked Sen
     func stop() async {
         lock.withLock { state.stopCount += 1 }
         continuation.yield(.idle)
+    }
+}
+
+private enum ModelFailure: Error {
+    case open
+    case start
+    case pause
+    case seek
+}
+
+private actor ModelPlaybackHistoryStore: PlaybackHistoryStoring {
+    private(set) var entries: [PlaybackHistoryEntry] = []
+
+    func upsert(_ entry: PlaybackHistoryEntry) {
+        entries.removeAll { $0.mediaID == entry.mediaID }
+        entries.append(entry)
+    }
+
+    func load() -> [PlaybackHistoryEntry] {
+        entries
+    }
+
+    func removeAll(sourceID: UUID) {
+        entries.removeAll { $0.sourceID == sourceID }
+    }
+}
+
+private actor SuspendedModelHistoryStore: PlaybackHistoryStoring {
+    nonisolated let upsertRequests: AsyncStream<Void>
+    private let upsertRequestContinuation: AsyncStream<Void>.Continuation
+    private var upsertContinuation: CheckedContinuation<Void, Never>?
+
+    init() {
+        let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        upsertRequests = stream.stream
+        upsertRequestContinuation = stream.continuation
+    }
+
+    func upsert(_ entry: PlaybackHistoryEntry) async {
+        upsertRequestContinuation.yield()
+        await withCheckedContinuation { continuation in
+            upsertContinuation = continuation
+        }
+    }
+
+    func load() -> [PlaybackHistoryEntry] { [] }
+    func removeAll(sourceID: UUID) {}
+
+    func releaseUpsert() {
+        upsertContinuation?.resume()
+        upsertContinuation = nil
+    }
+}
+
+private actor SuspendedModelProgressManager: PlaybackProgressManaging {
+    nonisolated let restoreRequests: AsyncStream<Void>
+    private let restoreRequestContinuation: AsyncStream<Void>.Continuation
+    private let storedProgress: PlaybackProgress
+    private var restoreContinuation: CheckedContinuation<Void, Never>?
+    private(set) var records: [ModelProgressManager.Record] = []
+
+    init(progress: PlaybackProgress) {
+        storedProgress = progress
+        let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        restoreRequests = stream.stream
+        restoreRequestContinuation = stream.continuation
+    }
+
+    func progress(mediaID: String) async -> PlaybackProgress? {
+        restoreRequestContinuation.yield()
+        await withCheckedContinuation { continuation in
+            restoreContinuation = continuation
+        }
+        return storedProgress.mediaID == mediaID ? storedProgress : nil
+    }
+
+    func record(
+        mediaID: String,
+        sourceID: UUID,
+        position: TimeInterval,
+        duration: TimeInterval,
+        force: Bool
+    ) {
+        records.append(.init(position: position, force: force))
+    }
+
+    func allProgress() -> [PlaybackProgress] { [storedProgress] }
+    func replaceAll(_ progress: [PlaybackProgress]) {}
+    func removeAll(sourceID: UUID) {}
+
+    func releaseRestore() {
+        restoreContinuation?.resume()
+        restoreContinuation = nil
     }
 }
 

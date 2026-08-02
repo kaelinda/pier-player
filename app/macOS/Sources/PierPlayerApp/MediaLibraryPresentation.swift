@@ -1,8 +1,41 @@
+import CloudSyncKit
 import Foundation
+import MediaSourceKit
 
 struct MediaPosterStyle: Equatable, Sendable {
     let paletteIndex: Int
     let symbolIndex: Int
+}
+
+struct MediaLibraryProjectedItem: Equatable, Sendable {
+    let mediaID: String?
+    let item: MediaLibraryItem
+    let lastPlayedAt: Date?
+    let progress: PlaybackProgress?
+    let isAvailable: Bool
+
+    var effectiveResumePosition: TimeInterval {
+        progress?.effectiveResumePosition ?? 0
+    }
+
+    var progressRatio: Double {
+        guard let progress else { return 0 }
+        return min(max(progress.position / progress.duration, 0), 1)
+    }
+
+    var isCompleted: Bool {
+        progress?.isCompleted ?? false
+    }
+
+    var isWatched: Bool {
+        isCompleted
+    }
+}
+
+struct MediaLibraryProjection: Equatable, Sendable {
+    let continueWatching: [MediaLibraryProjectedItem]
+    let recentlyPlayed: [MediaLibraryProjectedItem]
+    let allVideos: [MediaLibraryProjectedItem]
 }
 
 enum MediaLibraryPresentation {
@@ -62,6 +95,82 @@ enum MediaLibraryPresentation {
         }
     }
 
+    static func project(
+        scannedItems: [MediaLibraryItem],
+        history: [PlaybackHistoryEntry],
+        progress: [PlaybackProgress],
+        configuredSourceIDs: Set<UUID>,
+        connectedSourceIDs: Set<UUID>
+    ) -> MediaLibraryProjection {
+        let progressByMediaID = latestProgressByMediaID(progress)
+        let retainedHistory = history.filter {
+            configuredSourceIDs.contains($0.sourceID)
+        }
+        let historyByMediaID = latestHistoryByMediaID(retainedHistory)
+        var projectedByMediaID: [String: MediaLibraryProjectedItem] = [:]
+
+        for entry in historyByMediaID.values {
+            projectedByMediaID[entry.mediaID] = MediaLibraryProjectedItem(
+                mediaID: entry.mediaID,
+                item: mediaLibraryItem(from: entry),
+                lastPlayedAt: entry.lastPlayedAt,
+                progress: progressByMediaID[entry.mediaID],
+                isAvailable: connectedSourceIDs.contains(entry.sourceID)
+            )
+        }
+
+        var unidentifiedScannedItems: [MediaLibraryProjectedItem] = []
+        for item in scannedItems {
+            guard let mediaID = mediaID(for: item) else {
+                unidentifiedScannedItems.append(
+                    MediaLibraryProjectedItem(
+                        mediaID: nil,
+                        item: item,
+                        lastPlayedAt: nil,
+                        progress: nil,
+                        isAvailable: connectedSourceIDs.contains(item.sourceID)
+                    )
+                )
+                continue
+            }
+
+            projectedByMediaID[mediaID] = MediaLibraryProjectedItem(
+                mediaID: mediaID,
+                item: item,
+                lastPlayedAt: historyByMediaID[mediaID]?.lastPlayedAt,
+                progress: progressByMediaID[mediaID],
+                isAvailable: connectedSourceIDs.contains(item.sourceID)
+            )
+        }
+
+        let projectedItems = Array(projectedByMediaID.values) + unidentifiedScannedItems
+        let continueWatching = Array(
+            projectedItems
+                .filter { $0.effectiveResumePosition > 0 }
+                .sorted(by: isContinueWatchingBefore)
+                .prefix(12)
+        )
+        let continuingMediaIDs = Set(continueWatching.compactMap(\.mediaID))
+        let recentlyPlayed = Array(
+            projectedItems
+                .filter {
+                    $0.lastPlayedAt != nil
+                        && ($0.mediaID.map { !continuingMediaIDs.contains($0) } ?? true)
+                }
+                .sorted(by: isRecentlyPlayedBefore)
+                .prefix(12)
+        )
+        let sortedAllVideos = projectedItems.sorted {
+            isOrderedByTitle($0.item, $1.item, locale: .current)
+        }
+
+        return MediaLibraryProjection(
+            continueWatching: continueWatching,
+            recentlyPlayed: recentlyPlayed,
+            allVideos: sortedAllVideos
+        )
+    }
+
     static func posterStyle(for item: MediaLibraryItem) -> MediaPosterStyle {
         let hash = fnv1aHash(item.id)
         let paletteIndex = Int(hash % UInt64(paletteCount))
@@ -85,6 +194,92 @@ enum MediaLibraryPresentation {
             range: nil,
             locale: locale
         ) != nil
+    }
+
+    private static func mediaID(for item: MediaLibraryItem) -> String? {
+        guard let size = item.media.size else { return nil }
+        return MediaSyncIdentity.make(
+            from: MediaFileIdentity(
+                sourceID: item.sourceID,
+                path: item.media.path,
+                size: size,
+                modifiedAt: item.media.modifiedAt
+            )
+        )
+    }
+
+    private static func mediaLibraryItem(
+        from history: PlaybackHistoryEntry
+    ) -> MediaLibraryItem {
+        MediaLibraryItem(
+            sourceID: history.sourceID,
+            sourceName: history.sourceDisplayName,
+            media: MediaSourceItem(
+                name: history.fileName,
+                path: history.path,
+                kind: .file,
+                size: history.size,
+                modifiedAt: history.modifiedAt
+            )
+        )
+    }
+
+    private static func latestProgressByMediaID(
+        _ values: [PlaybackProgress]
+    ) -> [String: PlaybackProgress] {
+        values.reduce(into: [:]) { result, value in
+            guard value.modifiedAt > result[value.mediaID]?.modifiedAt ?? .distantPast else {
+                return
+            }
+            result[value.mediaID] = value
+        }
+    }
+
+    private static func latestHistoryByMediaID(
+        _ values: [PlaybackHistoryEntry]
+    ) -> [String: PlaybackHistoryEntry] {
+        values.reduce(into: [:]) { result, value in
+            guard value.lastPlayedAt > result[value.mediaID]?.lastPlayedAt ?? .distantPast else {
+                return
+            }
+            result[value.mediaID] = value
+        }
+    }
+
+    private static func isContinueWatchingBefore(
+        _ lhs: MediaLibraryProjectedItem,
+        _ rhs: MediaLibraryProjectedItem
+    ) -> Bool {
+        let lhsDate = lhs.progress?.modifiedAt ?? .distantPast
+        let rhsDate = rhs.progress?.modifiedAt ?? .distantPast
+        if lhsDate != rhsDate { return lhsDate > rhsDate }
+        return optionalRawCompare(lhs.mediaID, rhs.mediaID) == .orderedAscending
+    }
+
+    private static func isRecentlyPlayedBefore(
+        _ lhs: MediaLibraryProjectedItem,
+        _ rhs: MediaLibraryProjectedItem
+    ) -> Bool {
+        let lhsDate = lhs.lastPlayedAt ?? .distantPast
+        let rhsDate = rhs.lastPlayedAt ?? .distantPast
+        if lhsDate != rhsDate { return lhsDate > rhsDate }
+        return optionalRawCompare(lhs.mediaID, rhs.mediaID) == .orderedAscending
+    }
+
+    private static func optionalRawCompare(
+        _ lhs: String?,
+        _ rhs: String?
+    ) -> ComparisonResult {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?):
+            rawCompare(lhs, rhs)
+        case (_?, nil):
+            .orderedAscending
+        case (nil, _?):
+            .orderedDescending
+        case (nil, nil):
+            .orderedSame
+        }
     }
 
     private static func isMoreRecent(
