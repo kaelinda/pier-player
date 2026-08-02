@@ -11,7 +11,7 @@ struct VideoPlayerSheet: View {
     private let onStopped: @MainActor @Sendable () -> Void
     private let activePlayback: ActivePlaybackLifecycle?
     private let sourceID: UUID?
-    @State private var activePlaybackToken: UUID?
+    @State private var activePlaybackToken = ActivePlaybackTokenHandoff()
 
     @MainActor
     init(
@@ -75,7 +75,7 @@ struct VideoPlayerSheet: View {
         }
         .onAppear {
             guard let activePlayback, let sourceID else { return }
-            activePlaybackToken = activePlayback.register(
+            activePlaybackToken.install(activePlayback.register(
                 sourceID: sourceID,
                 stop: { [weak playerModel] in
                     guard let playerModel else { return }
@@ -85,12 +85,13 @@ struct VideoPlayerSheet: View {
                     guard let playerModel else { return }
                     await playerModel.forcePersistProgress()
                 }
-            )
+            ))
         }
         .onDisappear {
+            let token = activePlaybackToken.take()
             Task {
-                if let activePlayback, let activePlaybackToken {
-                    await activePlayback.stop(token: activePlaybackToken)
+                if let activePlayback, let token {
+                    await activePlayback.stop(token: token)
                 } else {
                     await playerModel.stop()
                 }

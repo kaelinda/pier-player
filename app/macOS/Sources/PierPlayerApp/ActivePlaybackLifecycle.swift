@@ -1,5 +1,18 @@
 import Foundation
 
+struct ActivePlaybackTokenHandoff {
+    private(set) var current: UUID?
+
+    mutating func install(_ token: UUID) {
+        current = token
+    }
+
+    mutating func take() -> UUID? {
+        defer { current = nil }
+        return current
+    }
+}
+
 @MainActor
 final class ActivePlaybackLifecycle {
     typealias Action = @MainActor @Sendable () async -> Void
@@ -11,6 +24,7 @@ final class ActivePlaybackLifecycle {
     }
 
     private var registrations: [UUID: Registration] = [:]
+    private var activeRegistrationToken: UUID?
     private var stopTasks: [UUID: Task<Void, Never>] = [:]
     private var forcePersistTask: (id: UUID, task: Task<Void, Never>)?
     private var forcePersistWaiters: [UUID: @MainActor () -> Void] = [:]
@@ -27,11 +41,15 @@ final class ActivePlaybackLifecycle {
             stop: stop,
             forcePersist: forcePersist
         )
+        activeRegistrationToken = token
         return token
     }
 
     func unregister(token: UUID) {
         registrations[token] = nil
+        if activeRegistrationToken == token {
+            activeRegistrationToken = nil
+        }
     }
 
     func forcePersistActive() async {
@@ -44,8 +62,8 @@ final class ActivePlaybackLifecycle {
 
     @discardableResult
     func beginForcePersist(onCompletion: @escaping @MainActor () -> Void) -> UUID? {
-        let actions = registrations.values.map(\.forcePersist)
-        guard !actions.isEmpty else {
+        guard let activeRegistrationToken,
+              let action = registrations[activeRegistrationToken]?.forcePersist else {
             onCompletion()
             return nil
         }
@@ -54,9 +72,7 @@ final class ActivePlaybackLifecycle {
         guard forcePersistTask == nil else { return waiterToken }
         let id = UUID()
         let task = Task { @MainActor in
-            for action in actions {
-                await action()
-            }
+            await action()
             finishForcePersist(id: id)
         }
         forcePersistTask = (id, task)
@@ -65,12 +81,14 @@ final class ActivePlaybackLifecycle {
 
     func cancelForcePersistWaiter(token: UUID) {
         forcePersistWaiters[token] = nil
+        guard forcePersistWaiters.isEmpty, let forcePersistTask else { return }
+        forcePersistTask.task.cancel()
+        self.forcePersistTask = nil
     }
 
     private func finishForcePersist(id: UUID) {
-        if forcePersistTask?.id == id {
-            forcePersistTask = nil
-        }
+        guard forcePersistTask?.id == id else { return }
+        forcePersistTask = nil
         let completions = Array(forcePersistWaiters.values)
         forcePersistWaiters.removeAll()
         for completion in completions {
@@ -99,6 +117,9 @@ final class ActivePlaybackLifecycle {
         stopTasks[token] = task
         await task.value
         registrations[token] = nil
+        if activeRegistrationToken == token {
+            activeRegistrationToken = nil
+        }
         stopTasks[token] = nil
     }
 }

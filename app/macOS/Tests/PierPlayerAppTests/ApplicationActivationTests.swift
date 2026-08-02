@@ -141,6 +141,66 @@ import Testing
     #expect(newFlushCount == 1)
 }
 
+@MainActor
+@Test func timedOutFlushDoesNotBlockOrCompleteTheNextGeneration() async throws {
+    let playback = ActivePlaybackLifecycle()
+    let oldBlocker = LifecycleFlushBlocker()
+    let newBlocker = LifecycleFlushBlocker()
+    _ = playback.register(
+        sourceID: UUID(),
+        stop: {},
+        forcePersist: { await oldBlocker.wait() }
+    )
+    let shortLifecycle = ApplicationLifecycleCoordinator(
+        activePlayback: playback,
+        flushTimeout: .milliseconds(10)
+    )
+    await shortLifecycle.sceneDidBecomeInactive {}
+
+    var newFlushCount = 0
+    var newDiagnosticsFinished = false
+    _ = playback.register(
+        sourceID: UUID(),
+        stop: {},
+        forcePersist: {
+            newFlushCount += 1
+            await newBlocker.wait()
+        }
+    )
+    let longLifecycle = ApplicationLifecycleCoordinator(
+        activePlayback: playback,
+        flushTimeout: .seconds(1)
+    )
+    let nextGeneration = Task { @MainActor in
+        await longLifecycle.sceneDidBecomeInactive {
+            newDiagnosticsFinished = true
+        }
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(newFlushCount == 1)
+
+    await oldBlocker.release()
+    try await Task.sleep(for: .milliseconds(10))
+    #expect(!newDiagnosticsFinished)
+
+    await newBlocker.release()
+    await nextGeneration.value
+    #expect(newDiagnosticsFinished)
+}
+
+@Test func tokenHandoffKeepsAReappearedRegistrationSeparate() {
+    var handoff = ActivePlaybackTokenHandoff()
+    let oldToken = UUID()
+    let newToken = UUID()
+    handoff.install(oldToken)
+
+    let disappearingToken = handoff.take()
+    handoff.install(newToken)
+
+    #expect(disappearingToken == oldToken)
+    #expect(handoff.current == newToken)
+}
+
 private actor LifecycleFlushBlocker {
     nonisolated let requests: AsyncStream<Void>
     private let requestContinuation: AsyncStream<Void>.Continuation
