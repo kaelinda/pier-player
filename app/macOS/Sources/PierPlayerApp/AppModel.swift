@@ -10,6 +10,12 @@ enum SMBSourceUpdateError: Error, Equatable {
     case credentialRollbackFailed
 }
 
+enum SMBSourceRemovalError: Error, Equatable {
+    case changesNotSaved
+    case sourceNotFound
+    case credentialRollbackFailed
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     typealias SourceFactory = (
@@ -457,14 +463,52 @@ final class AppModel: ObservableObject {
         await syncCoordinator?.enqueue(.upsertSource(updatedStorage.syncedSource))
     }
 
-    func removeSource(id: UUID) async {
-        guard configuredSources.contains(where: { $0.id == id }) else { return }
+    func removeSource(id: UUID) async throws {
+        guard configuredSources.contains(where: { $0.id == id }) else {
+            throw SMBSourceRemovalError.sourceNotFound
+        }
+        let storedSources: [SMBStorageSource]
+        do {
+            storedSources = try await sourceStore.load()
+        } catch {
+            throw SMBSourceRemovalError.changesNotSaved
+        }
+        guard storedSources.contains(where: { $0.id == id }) else {
+            throw SMBSourceRemovalError.sourceNotFound
+        }
+        let storedCredential: StoredSMBCredential?
+        do {
+            storedCredential = try await credentialStore.load(sourceID: id)
+        } catch {
+            throw SMBSourceRemovalError.changesNotSaved
+        }
+
+        do {
+            try await credentialStore.delete(sourceID: id)
+        } catch {
+            throw SMBSourceRemovalError.changesNotSaved
+        }
+        do {
+            try await sourceStore.remove(id: id)
+        } catch {
+            if let storedCredential {
+                do {
+                    try await credentialStore.save(
+                        sourceID: id,
+                        credential: storedCredential.credential,
+                        domain: storedCredential.domain
+                    )
+                } catch {
+                    throw SMBSourceRemovalError.credentialRollbackFailed
+                }
+            }
+            throw SMBSourceRemovalError.changesNotSaved
+        }
+
         if let index = sources.firstIndex(where: { $0.id == id }) {
             let source = sources.remove(at: index)
             await source.source.disconnect()
         }
-        try? await credentialStore.delete(sourceID: id)
-        try? await sourceStore.remove(id: id)
         configuredSources.removeAll { $0.id == id }
         await syncCoordinator?.enqueue(.deleteSource(id: id, modifiedAt: Date()))
         sourceRevision &+= 1
@@ -622,6 +666,12 @@ final class AppModel: ObservableObject {
             "The changes could not be saved. Your previous source settings are still active."
         case SMBSourceUpdateError.credentialRollbackFailed:
             "The changes were not saved, and the previous credentials could not be restored."
+        case SMBSourceRemovalError.changesNotSaved:
+            "The source could not be removed. Its connection and saved credentials are still available."
+        case SMBSourceRemovalError.sourceNotFound:
+            "The source could not be removed because its saved configuration is missing."
+        case SMBSourceRemovalError.credentialRollbackFailed:
+            "The source was not removed, and its saved credentials could not be restored."
         default:
             "The SMB source could not be connected."
         }

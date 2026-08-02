@@ -50,7 +50,7 @@ struct PlaybackControlsView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
-                        .background(Color.teal.opacity(0.9), in: Circle())
+                        .background(PierPlayerTheme.accent.opacity(0.9), in: Circle())
                 }
                 .buttonStyle(PlayerChromeButtonStyle())
                 .help(model.snapshot.intendsToPlay ? "Pause" : "Play")

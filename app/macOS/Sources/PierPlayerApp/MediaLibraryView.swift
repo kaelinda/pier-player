@@ -491,7 +491,7 @@ private struct RecentMediaCard: View {
                 MediaArtwork(item: item)
                     .frame(width: 248, height: 140)
                     .shadow(
-                        color: .teal.opacity(isHovering ? 0.18 : 0),
+                        color: PierPlayerTheme.accent.opacity(isHovering ? 0.18 : 0),
                         radius: isHovering ? 10 : 4,
                         y: isHovering ? 5 : 2
                     )
@@ -570,7 +570,7 @@ private struct PosterMediaCard: View {
                 MediaArtwork(item: item)
                     .aspectRatio(2 / 3, contentMode: .fit)
                     .shadow(
-                        color: .teal.opacity(isHovering ? 0.18 : 0),
+                        color: PierPlayerTheme.accent.opacity(isHovering ? 0.18 : 0),
                         radius: isHovering ? 10 : 4,
                         y: isHovering ? 5 : 2
                     )
@@ -644,10 +644,10 @@ private struct MediaSourceCard: View {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.teal.opacity(0.16))
+                        .fill(PierPlayerTheme.accent.opacity(0.16))
                     Image(systemName: "externaldrive.connected.to.line.below")
                         .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.teal)
+                        .foregroundStyle(PierPlayerTheme.accent)
                 }
                 .frame(width: 42, height: 42)
 

@@ -185,7 +185,7 @@ struct PierPlayerApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appModel)
-                .tint(.teal)
+                .tint(PierPlayerTheme.accent)
                 .frame(minWidth: 820, minHeight: 560)
                 .task {
                     appDelegate.prepareForTermination = { [diagnosticsRuntime] in
@@ -210,8 +210,7 @@ struct PierPlayerApp: App {
                 viewModel: diagnosticsViewModel,
                 diagnosticsDirectory: diagnosticsRuntime.directory
             )
-            .tint(.teal)
-            .preferredColorScheme(.dark)
+            .tint(PierPlayerTheme.accent)
         }
     }
 }

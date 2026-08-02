@@ -288,6 +288,7 @@ struct EditSMBSourceView: View {
             } catch {
                 errorMessage = AppModel.connectionErrorMessage(for: error)
                 isSaving = false
+                AccessibilityAnnouncement.post(errorMessage ?? "The changes could not be saved.")
             }
         }
     }
@@ -388,10 +389,10 @@ struct SourceSheetHeader: View {
         HStack(spacing: 13) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.teal.opacity(0.14))
+                    .fill(PierPlayerTheme.accent.opacity(0.14))
                 Image(systemName: systemImage)
                     .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.teal)
+                    .foregroundStyle(PierPlayerTheme.accent)
             }
             .frame(width: 42, height: 42)
 

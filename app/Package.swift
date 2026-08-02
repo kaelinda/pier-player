@@ -136,7 +136,10 @@ let package = Package(
                 "SubtitleKit",
                 "CloudSyncKit",
             ],
-            path: "macOS/Sources/PierPlayerApp"
+            path: "macOS/Sources/PierPlayerApp",
+            linkerSettings: [
+                .linkedFramework("MediaAccessibility"),
+            ]
         ),
         .executableTarget(
             name: "SMBProbe",

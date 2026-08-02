@@ -48,7 +48,7 @@ struct VideoPlayerSheet: View {
         }
         .frame(minWidth: 760, idealWidth: 960, minHeight: 520, idealHeight: 640)
         .background(Color.black)
-        .tint(.teal)
+        .tint(PierPlayerTheme.accent)
         .environment(\.colorScheme, .dark)
         .task {
             await playerModel.start()
@@ -56,12 +56,19 @@ struct VideoPlayerSheet: View {
         .onDisappear {
             Task { await playerModel.stop() }
         }
+        .onChange(of: playerModel.snapshot.failure) { _, failure in
+            guard let failure else { return }
+            let presentation = PlayerFailurePresentation(failure: failure)
+            AccessibilityAnnouncement.post(
+                "\(presentation.title). \(presentation.message)"
+            )
+        }
     }
 
     private var playerHeader: some View {
         HStack(spacing: 11) {
             Image(systemName: "film.fill")
-                .foregroundStyle(.teal)
+                .foregroundStyle(PierPlayerTheme.accent)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 2) {

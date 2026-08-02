@@ -339,6 +339,92 @@ import Testing
 }
 
 @MainActor
+@Test func removingSourceDeletesPersistentStateBeforeDisconnecting() async throws {
+    let fixture = try SourceManagementModelFixture()
+    let model = fixture.model
+
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    let source = try #require(fixture.factory.sources.first)
+
+    try await model.removeSource(id: sourceID)
+
+    #expect(model.source(id: sourceID) == nil)
+    #expect(model.sourceRevision == 2)
+    #expect(await fixture.sourceStore.load().isEmpty)
+    #expect(await fixture.credentialStore.load(sourceID: sourceID) == nil)
+    #expect(await source.disconnectCount == 1)
+}
+
+@MainActor
+@Test func sourceMetadataRemovalFailureKeepsTheLiveSourceAndCredentials() async throws {
+    let fixture = try SourceManagementModelFixture()
+    let model = fixture.model
+
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    let source = try #require(fixture.factory.sources.first)
+    await fixture.sourceStore.failNextRemove()
+
+    await #expect(throws: SMBSourceRemovalError.changesNotSaved) {
+        try await model.removeSource(id: sourceID)
+    }
+
+    #expect(model.source(id: sourceID) != nil)
+    #expect(model.sourceRevision == 1)
+    #expect(await fixture.sourceStore.load().count == 1)
+    #expect(await fixture.credentialStore.load(sourceID: sourceID) != nil)
+    #expect(await source.disconnectCount == 0)
+}
+
+@MainActor
+@Test func credentialRemovalFailureRestoresMetadataAndKeepsTheLiveSource() async throws {
+    let fixture = try SourceManagementModelFixture()
+    let model = fixture.model
+
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    let source = try #require(fixture.factory.sources.first)
+    await fixture.credentialStore.failNextDelete()
+
+    await #expect(throws: SMBSourceRemovalError.changesNotSaved) {
+        try await model.removeSource(id: sourceID)
+    }
+
+    #expect(model.source(id: sourceID) != nil)
+    #expect(model.sourceRevision == 1)
+    #expect(await fixture.sourceStore.load().count == 1)
+    #expect(await fixture.credentialStore.load(sourceID: sourceID) != nil)
+    #expect(await source.disconnectCount == 0)
+}
+
+@MainActor
+@Test func credentialRollbackFailureIsReportedWithoutDisconnectingTheSource() async throws {
+    let fixture = try SourceManagementModelFixture()
+    let model = fixture.model
+
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    let source = try #require(fixture.factory.sources.first)
+    await fixture.sourceStore.failNextRemove()
+    await fixture.credentialStore.failSave(afterSuccessfulSaves: 0, failureCount: 1)
+
+    await #expect(throws: SMBSourceRemovalError.credentialRollbackFailed) {
+        try await model.removeSource(id: sourceID)
+    }
+
+    #expect(model.source(id: sourceID) != nil)
+    #expect(model.sourceRevision == 1)
+    #expect(await fixture.sourceStore.load().count == 1)
+    #expect(await fixture.credentialStore.load(sourceID: sourceID) == nil)
+    #expect(await source.disconnectCount == 0)
+    #expect(
+        AppModel.connectionErrorMessage(for: SMBSourceRemovalError.credentialRollbackFailed)
+            == "The source was not removed, and its saved credentials could not be restored."
+    )
+}
+
+@MainActor
 private func addExistingSource(to model: AppModel) async throws {
     try await model.addSMBSource(
         displayName: "Home NAS",
@@ -387,6 +473,7 @@ private actor SourceManagementCredentialStore: SMBCredentialStore {
     private var credentials: [UUID: StoredSMBCredential] = [:]
     private var successfulSavesBeforeFailure: Int?
     private var remainingSaveFailures = 0
+    private var shouldFailNextDelete = false
 
     func save(sourceID: UUID, credential: SMBCredential, domain: String?) throws {
         if let successfulSavesBeforeFailure {
@@ -409,13 +496,21 @@ private actor SourceManagementCredentialStore: SMBCredentialStore {
         credentials[sourceID]
     }
 
-    func delete(sourceID: UUID) {
+    func delete(sourceID: UUID) throws {
+        if shouldFailNextDelete {
+            shouldFailNextDelete = false
+            throw SourceManagementPersistenceError.saveFailed
+        }
         credentials[sourceID] = nil
     }
 
     func failSave(afterSuccessfulSaves count: Int, failureCount: Int) {
         successfulSavesBeforeFailure = count
         remainingSaveFailures = failureCount
+    }
+
+    func failNextDelete() {
+        shouldFailNextDelete = true
     }
 }
 
@@ -434,6 +529,7 @@ private actor RecordingSyncCoordinator: CloudSyncCoordinating {
 private actor SourceManagementSourceStore: SMBSourceStoring {
     private var sources: [SMBStorageSource] = []
     private var shouldFailNextUpdate = false
+    private var shouldFailNextRemove = false
 
     func load() -> [SMBStorageSource] {
         sources
@@ -458,12 +554,20 @@ private actor SourceManagementSourceStore: SMBSourceStoring {
         sources[index] = source
     }
 
-    func remove(id: UUID) {
+    func remove(id: UUID) throws {
+        if shouldFailNextRemove {
+            shouldFailNextRemove = false
+            throw SourceManagementPersistenceError.saveFailed
+        }
         sources.removeAll { $0.id == id }
     }
 
     func failNextUpdate() {
         shouldFailNextUpdate = true
+    }
+
+    func failNextRemove() {
+        shouldFailNextRemove = true
     }
 }
 

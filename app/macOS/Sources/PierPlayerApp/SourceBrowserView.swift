@@ -58,10 +58,10 @@ struct SourceBrowserView: View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.teal.opacity(0.12))
+                    .fill(PierPlayerTheme.accent.opacity(0.12))
                 Image(systemName: path == "/" ? "externaldrive.fill" : "folder.fill")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.teal)
+                    .foregroundStyle(PierPlayerTheme.accent)
             }
             .frame(width: 34, height: 34)
 
@@ -235,8 +235,8 @@ private struct MediaItemRow: View {
     }
 
     private var iconColor: Color {
-        if item.kind == .directory { return .teal }
-        if item.isSupportedVideo { return .teal }
+        if item.kind == .directory { return PierPlayerTheme.accent }
+        if item.isSupportedVideo { return PierPlayerTheme.accent }
         return .secondary
     }
 

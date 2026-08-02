@@ -80,6 +80,7 @@ struct AddSMBSourceView: View {
             } catch {
                 errorMessage = AppModel.connectionErrorMessage(for: error)
                 isConnecting = false
+                AccessibilityAnnouncement.post(errorMessage ?? "Connection failed.")
             }
         }
     }

@@ -25,6 +25,13 @@ import Testing
         "Edit Source",
         "Remove Source",
     ])
+    let removal = SourceRemovalRequest(
+        id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+        displayName: "Home NAS"
+    )
+    #expect(removal.title == "Remove \"Home NAS\"?")
+    #expect(removal.message.contains("saved credentials"))
+    #expect(removal.message.contains("will not be deleted"))
 
     let details = sourceManagementDetailsFixture()
     #expect(details.address == "smb://nas.local/Media")
@@ -152,6 +159,12 @@ import Testing
     #expect(PlaybackControlCopy.timeLabel(-1) == "0:00")
     #expect(PlaybackControlCopy.timeLabel(65) == "1:05")
     #expect(PlaybackControlCopy.timeLabel(3_661) == "1:01:01")
+}
+
+@Test func subtitleAppearanceReadsValidSystemCaptionMetrics() {
+    let appearance = SubtitleAppearance.system
+    #expect(appearance.relativeCharacterSize >= 0.5)
+    #expect(SubtitleAppearance.settingsChangedNotification.rawValue.isEmpty == false)
 }
 
 @MainActor
@@ -367,6 +380,25 @@ func playerRendersLongMetadataAtSupportedSizes(size: CGSize) async throws {
 }
 
 @MainActor
+@Test func subtitleOverlayRendersAtAccessibilityTextSize() throws {
+    let size = CGSize(width: 760, height: 220)
+    let image = try render(
+        SubtitleOverlayView(
+            text: "A long subtitle line remains readable when accessibility text sizing is enabled."
+        )
+        .dynamicTypeSize(.accessibility3)
+        .padding(24)
+        .frame(width: size.width, height: size.height, alignment: .bottom),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 2)
+    try writeSnapshotIfRequested(image, name: "subtitle-accessibility-size")
+}
+
+@MainActor
 @Test func videoPlayerSheetRendersFriendlyCorruptMediaFailure() async throws {
     let size = CGSize(width: 760, height: 520)
     let item = testVideoItem()
@@ -435,6 +467,35 @@ private func diagnosticsSettingsRendersAllOperationalStates(
     #expect(DiagnosticsSettingsCopy.reveal == "Reveal in Finder")
     #expect(DiagnosticsSettingsCopy.clear == "Clear History")
     try writeSnapshotIfRequested(image, name: "diagnostics-settings-\(fixture.name)")
+}
+
+@MainActor
+@Test func diagnosticsSettingsRendersInLightAppearance() throws {
+    let size = CGSize(width: 520, height: 560)
+    let fixture = DiagnosticSettingsRenderingFixture.all[0]
+    let image = try renderInWindow(
+        DiagnosticsSettingsContentView(
+            snapshot: fixture.snapshot,
+            now: fixture.now,
+            selectedRunIDs: .constant([]),
+            isExporting: false,
+            setDetailedEnabled: { _ in },
+            export: {},
+            reveal: {},
+            clear: {}
+        )
+        .preferredColorScheme(.light)
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size,
+        appearance: NSAppearance(named: .aqua)
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 8)
+    #expect(darkPixelFraction(in: image) < 0.45)
+    try writeSnapshotIfRequested(image, name: "diagnostics-settings-light")
 }
 
 @MainActor

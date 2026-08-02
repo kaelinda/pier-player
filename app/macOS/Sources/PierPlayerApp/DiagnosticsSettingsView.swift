@@ -332,7 +332,7 @@ struct DiagnosticsSettingsContentView: View {
 
     private var modeColor: Color {
         switch snapshot.policy {
-        case .standard: .teal
+        case .standard: PierPlayerTheme.accent
         case .detailed: .blue
         case .incident: .orange
         }
@@ -358,7 +358,9 @@ private struct DiagnosticRunRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: run.endedAt == nil ? "record.circle" : "checkmark.circle")
-                .foregroundStyle(run.endedAt == nil ? Color.teal : Color.secondary)
+                .foregroundStyle(
+                    run.endedAt == nil ? PierPlayerTheme.accent : Color.secondary
+                )
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(run.endedAt == nil ? "Current Session" : "Recorded Session")

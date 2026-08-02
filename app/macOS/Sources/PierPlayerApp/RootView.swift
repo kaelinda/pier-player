@@ -20,6 +20,8 @@ struct RootView: View {
     @State private var isAddingSource = false
     @State private var selectedDestination: SidebarDestination? = .library
     @State private var sourceManagementSheet: SourceManagementSheet?
+    @State private var pendingSourceRemoval: SourceRemovalRequest?
+    @State private var sourceRemovalError: SourceRemovalErrorPresentation?
 
     var body: some View {
         NavigationSplitView {
@@ -40,6 +42,26 @@ struct RootView: View {
                 EditSMBSourceView(model: model, details: details)
             }
         }
+        .confirmationDialog(
+            pendingSourceRemoval?.title ?? "Remove Source?",
+            isPresented: sourceRemovalConfirmationPresented,
+            titleVisibility: .visible,
+            presenting: pendingSourceRemoval
+        ) { request in
+            Button("Remove Source", role: .destructive) {
+                removeSource(request)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { request in
+            Text(request.message)
+        }
+        .alert(item: $sourceRemovalError) { error in
+            Alert(
+                title: Text("Could Not Remove Source"),
+                message: Text(error.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
         .onChange(of: model.configuredSources.map(\.id), initial: true) { _, sourceIDs in
             selectedDestination = destination.reconciled(with: sourceIDs)
         }
@@ -53,7 +75,7 @@ struct RootView: View {
             addSource: { isAddingSource = true },
             showSourceInformation: showSourceInformation,
             editSource: editSource,
-            removeSource: removeSource
+            removeSource: requestSourceRemoval
         )
     }
 
@@ -95,9 +117,34 @@ struct RootView: View {
         )
     }
 
-    private func removeSource(_ id: UUID) {
+    private var sourceRemovalConfirmationPresented: Binding<Bool> {
+        Binding(
+            get: { pendingSourceRemoval != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingSourceRemoval = nil
+                }
+            }
+        )
+    }
+
+    private func requestSourceRemoval(_ id: UUID) {
+        guard let source = model.configuredSource(id: id) else { return }
+        pendingSourceRemoval = SourceRemovalRequest(
+            id: source.id,
+            displayName: source.displayName
+        )
+    }
+
+    private func removeSource(_ request: SourceRemovalRequest) {
         Task {
-            await model.removeSource(id: id)
+            do {
+                try await model.removeSource(id: request.id)
+            } catch {
+                sourceRemovalError = SourceRemovalErrorPresentation(
+                    message: AppModel.connectionErrorMessage(for: error)
+                )
+            }
         }
     }
 
@@ -110,6 +157,23 @@ struct RootView: View {
         guard let source = model.configuredSource(id: id) else { return }
         sourceManagementSheet = .edit(SMBSourceDetails(source: source))
     }
+}
+
+struct SourceRemovalRequest: Identifiable, Equatable {
+    let id: UUID
+    let displayName: String
+
+    var title: String { "Remove \"\(displayName)\"?" }
+
+    var message: String {
+        "Pier Player will disconnect this source and remove its saved credentials. "
+            + "Media files on the server will not be deleted."
+    }
+}
+
+private struct SourceRemovalErrorPresentation: Identifiable {
+    let id = UUID()
+    let message: String
 }
 
 private enum SourceManagementSheet: Identifiable {
@@ -221,7 +285,7 @@ struct RootSidebarContent: View {
         HStack(spacing: 9) {
             Image(systemName: sources.isEmpty ? "externaldrive" : "externaldrive.connected.to.line.below")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(sources.isEmpty ? Color.secondary : Color.teal)
+                .foregroundStyle(sources.isEmpty ? Color.secondary : PierPlayerTheme.accent)
                 .frame(width: 16)
 
             Text(sourceCountLabel)
@@ -265,12 +329,12 @@ private struct SourceSidebarRow: View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.teal.opacity(0.14))
+                    .fill(PierPlayerTheme.accent.opacity(0.14))
                 Image(systemName: source.connectionState == .connected
                     ? "externaldrive.connected.to.line.below"
                     : "externaldrive.badge.person.crop")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.teal)
+                    .foregroundStyle(PierPlayerTheme.accent)
             }
             .frame(width: 30, height: 30)
 
