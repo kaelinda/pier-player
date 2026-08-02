@@ -555,9 +555,11 @@ import Testing
     )
     try await addExistingSource(to: model)
     let sourceID = try #require(model.sources.first?.id)
-    _ = lifecycle.register(sourceID: sourceID) {
-        await order.record("stop")
-    }
+    _ = lifecycle.register(
+        sourceID: sourceID,
+        stop: { await order.record("stop") },
+        forcePersist: {}
+    )
 
     try await model.removeSource(id: sourceID)
 

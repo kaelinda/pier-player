@@ -75,9 +75,11 @@ struct VideoPlayerSheet: View {
         }
         .onAppear {
             guard let activePlayback, let sourceID else { return }
-            activePlaybackToken = activePlayback.register(sourceID: sourceID) {
-                await playerModel.stop()
-            }
+            activePlaybackToken = activePlayback.register(
+                sourceID: sourceID,
+                stop: { await playerModel.stop() },
+                forcePersist: { await playerModel.forcePersistProgress() }
+            )
         }
         .onDisappear {
             Task {

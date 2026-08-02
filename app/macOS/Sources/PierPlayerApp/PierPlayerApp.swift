@@ -147,10 +147,15 @@ struct PierPlayerApp: App {
     @StateObject private var appModel: AppModel
     @StateObject private var diagnosticsViewModel: DiagnosticsViewModel
     private let diagnosticsRuntime: DiagnosticsRuntime
+    private let applicationLifecycle: ApplicationLifecycleCoordinator
 
     init() {
         let runtime = DiagnosticsRuntime()
         diagnosticsRuntime = runtime
+        let activePlayback = ActivePlaybackLifecycle()
+        applicationLifecycle = ApplicationLifecycleCoordinator(
+            activePlayback: activePlayback
+        )
         let playbackContext = DiagnosticContext(
             appRunID: runtime.context.appRunID,
             activityID: UUID(),
@@ -174,7 +179,8 @@ struct PierPlayerApp: App {
             diagnosticContext: runtime.context,
             identityProvider: runtime.identityProvider,
             syncCoordinator: syncCoordinator,
-            progressManager: progressManager
+            progressManager: progressManager,
+            activePlayback: activePlayback
         ))
         _diagnosticsViewModel = StateObject(wrappedValue: DiagnosticsViewModel(
             client: LiveDiagnosticsCenterClient(center: runtime.center)
@@ -188,8 +194,10 @@ struct PierPlayerApp: App {
                 .tint(PierPlayerTheme.accent)
                 .frame(minWidth: 820, minHeight: 560)
                 .task {
-                    appDelegate.prepareForTermination = { [diagnosticsRuntime] in
-                        await diagnosticsRuntime.stop()
+                    appDelegate.prepareForTermination = {
+                        await applicationLifecycle.prepareForTermination {
+                            await diagnosticsRuntime.stop()
+                        }
                     }
                     await diagnosticsRuntime.start()
                     await appModel.restore()
@@ -199,7 +207,11 @@ struct PierPlayerApp: App {
                     if phase == .active {
                         Task { await appModel.synchronizeSources() }
                     } else {
-                        Task { await diagnosticsRuntime.flush() }
+                        Task {
+                            await applicationLifecycle.sceneDidBecomeInactive {
+                                await diagnosticsRuntime.flush()
+                            }
+                        }
                     }
                 }
         }
