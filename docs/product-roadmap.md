@@ -1,6 +1,6 @@
 # Pier Player Product Roadmap
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
 
 This document tracks product-level optimization work. Detailed architecture and
 implementation plans remain under `docs/superpowers/`; this file records order,
@@ -35,21 +35,24 @@ status, dependencies, and acceptance criteria.
   - [x] Throttle periodic writes and force a write on pause, close, and playback end.
   - [x] Resume only after five seconds and treat 95% playback as completed.
   - [x] Merge progress through the local-first CloudKit synchronization boundary.
-  - [ ] Add a device-local played-only history store containing the opaque media ID,
+  - [x] Add a device-local played-only history store containing the opaque media ID,
     source ID, display metadata, relative path, file size, modification date, and last
     played date; never synchronize this file through CloudKit.
-  - [ ] Add a **Continue Watching** shelf to Media Library.
-  - [ ] Add a non-duplicating **Recently Played** shelf for completed and recent items.
-  - [ ] Sort resumable items by most recently played.
-  - [ ] Show stable progress indicators on continue-watching and library items.
-  - [ ] Refresh the shelf immediately when the player closes or playback completes.
-  - [ ] Exclude completed, missing, changed, and unresolvable media identities.
-  - [ ] Force valid progress writes after successful seek, playback failure, app
+  - [x] Add a **Continue Watching** shelf to Media Library.
+  - [x] Add a non-duplicating **Recently Played** shelf for completed and recent items.
+  - [x] Sort resumable items by most recently played.
+  - [x] Show stable progress indicators on continue-watching and library items.
+  - [x] Refresh the shelf immediately when the player closes or playback completes.
+  - [x] Exclude completed and unresolvable identities from Continue Watching, and
+    prevent changed replacements from inheriting or displaying stale progress.
+  - [x] Force valid progress writes after successful seek, playback failure, app
     inactivity, and termination in addition to the existing pause/close/end triggers.
-  - [ ] Keep a completed item watched when it is opened accidentally and stopped before
+  - [x] Keep a completed item watched when it is opened accidentally and stopped before
     five seconds; clear completion only after the new viewing passes five seconds.
-  - [ ] Remove device-local history and progress when a source is explicitly removed.
-  - [ ] Preserve current search, partial-scan, source-failure, and empty states.
+  - [x] Remove device-local history and progress when a source is explicitly removed.
+  - [x] Preserve current search, partial-scan, source-failure, and empty states.
+  - [ ] Reconcile a previously played path that disappears without a replacement after
+    a complete scan, so stale local history cannot remain actionable.
 
 Acceptance criteria:
 
@@ -62,6 +65,18 @@ Acceptance criteria:
   stays stored for future reconciliation, appears as unavailable when local history can
   identify it, and routes the user to reconnect instead of attempting playback.
 - Focused model and rendering tests pass at the minimum and default window sizes.
+
+Delivered locally on `codex/playback-continuity`; the repository gate covers
+completion thresholds, source cleanup and rollback, lifecycle timeouts, projection
+joins, search isolation, accessibility state, and 820x560/1120x720 light/dark
+rendering. Remaining acceptance work requires a real NAS and signed multi-device app:
+
+- Verify stop, sleep, termination, reconnect, and missing-file behavior against a real
+  SMB source rather than test doubles.
+- Validate CloudKit progress convergence and synchronizable Keychain credentials on
+  two signed devices before claiming cross-device continuity.
+- Move disappearance reconciliation into the persistent media-index milestone instead
+  of treating a partial or failed scan as authoritative deletion.
 
 ## P1: Persistent Media Library
 
@@ -99,7 +114,7 @@ Acceptance criteria:
 ## P2: Broad Format Playback
 
 - [-] Maintain the owned FFmpeg/VideoToolbox playback path and LGPL-only boundary.
-- [ ] Reconcile README format claims with the implemented decoder and subtitle paths.
+- [x] Reconcile README format claims with the implemented decoder and subtitle paths.
 - [ ] Complete the supported container, codec, audio-track, and subtitle matrix.
 - [ ] Validate HDR, color-space, audio-output, seek, EOF, and corruption behavior.
 - [ ] Publish Release benchmarks using the fixed media and network matrix.
@@ -131,7 +146,9 @@ External requirements:
 - [ ] Add crash recovery and update-distribution strategy.
 - [ ] Maintain a real Mac/NAS end-to-end acceptance matrix.
 - [ ] Capture product context in `PRODUCT.md` and the visual system in `DESIGN.md`.
-- [ ] Keep README current with shipped behavior and known limitations.
+- [-] Keep README current with shipped behavior and known limitations.
+  - Playback, subtitles, credentials, continuity, and current verification limits were
+    reconciled on 2026-08-03; keep this item ongoing as capabilities change.
 
 ## Verification Gate
 

@@ -10,7 +10,7 @@ downloading the entire file first.
 
 ## Current Capabilities
 
-The current `main` branch provides:
+The current implementation provides:
 
 - A native macOS 14+ application built with SwiftUI.
 - Direct SMB connections using a host, share, username, password, optional
@@ -18,19 +18,27 @@ The current `main` branch provides:
 - Persisted sources, automatic reconnection, hierarchical file browsing, and
   source removal.
 - A media library view with bounded scanning, search, recently added videos,
-  and direct access to each connected source.
-- Progressive playback of `.mp4`, `.m4v`, and `.mov` files through
-  `AVAssetResourceLoader` and `AVPlayer`.
+  Continue Watching, Recently Played, watched and unavailable states, progress
+  indicators, and direct access to each connected source.
+- Progressive playback through the pinned LGPL-compatible FFmpeg runtime, with
+  VideoToolbox hardware decoding when available and bounded software fallback.
+- Audio-track selection plus embedded text subtitles and same-basename external
+  `.srt`, `.ass`, and `.vtt` subtitles.
+- Device-local played history and resumable progress. Readable titles and paths
+  stay on the Mac; CloudKit playback-progress records use only opaque media
+  identities and numeric progress.
 - Shared source, cache, playback-state, and telemetry foundations for later
   Apple-platform clients.
 - Privacy-bounded local diagnostics for resource access and playback behavior,
   with an in-app Settings view and explicit support-bundle export.
 - An opt-in `SMBProbe` command for NAS connectivity and throughput checks.
 
-The current player does **not** yet support MKV, AVI, MPEG-TS, WebM, subtitles,
-track selection, or the planned FFmpeg/VideoToolbox playback pipeline. Codec
-support inside the accepted containers is determined by AVFoundation. The iOS
-and tvOS clients are placeholders and are not included in the package.
+The checked-in fixture matrix verifies representative MKV/H.264/AAC,
+WebM/VP9/Opus, AVI/MPEG-4/MP3, and MPEG-TS/MPEG-2/AC-3 playback. The library also
+recognizes other common video extensions, but the complete container, codec,
+HDR, audio-output, and corruption matrix is not yet release-qualified. Bitmap
+subtitle formats are not advertised. The iOS and tvOS clients are placeholders
+and are not included in the package.
 
 ## Requirements
 
@@ -68,19 +76,18 @@ When the app opens:
 Enter the host separately from the share. For example, use `nas.local` as the
 host and `Media` as the share, not `smb://nas.local/Media` in either field.
 
-## Security Notice
+## Credential Security
 
-Do not use production credentials with the current prototype. Although the app
-writes credentials to the macOS Keychain, the persisted source record currently
-also includes the username and password in plaintext at:
+SMB usernames, passwords, and credential domains are stored in the macOS
+Keychain. Persisted source records contain only non-secret connection metadata.
+On startup, legacy source records are migrated to Keychain before their
+plaintext credential fields are removed; a failed migration preserves the old
+record rather than partially committing it.
 
-```text
-~/Library/Application Support/PierPlayer/sources.json
-```
-
-That duplicate plaintext storage must be removed before the application is
-considered safe for general use or distribution. Logs and bug reports must also
-redact SMB hosts, paths, usernames, and passwords.
+Pier Player is still a development prototype, not a production release. The
+played-history file is device-local and contains normalized relative paths; logs,
+bug reports, and support material must continue to avoid exposing credentials,
+SMB hosts, shares, usernames, or unrestricted private paths.
 
 ## iCloud Sync Setup
 
