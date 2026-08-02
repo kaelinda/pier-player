@@ -539,6 +539,32 @@ import Testing
 }
 
 @MainActor
+@Test func sourceRemovalStopsActivePlaybackBeforeContinuityCleanup() async throws {
+    let order = SourceRemovalOrderProbe()
+    let lifecycle = ActivePlaybackLifecycle()
+    let historyStore = SourceManagementHistoryStore(orderProbe: order)
+    let sourceStore = SourceManagementSourceStore()
+    let credentialStore = SourceManagementCredentialStore()
+    let factory = SourceManagementSourceFactory()
+    let model = AppModel(
+        credentialStore: credentialStore,
+        sourceStore: sourceStore,
+        sourceFactory: factory.makeSource,
+        historyStore: historyStore,
+        activePlayback: lifecycle
+    )
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+    _ = lifecycle.register(sourceID: sourceID) {
+        await order.record("stop")
+    }
+
+    try await model.removeSource(id: sourceID)
+
+    #expect(await order.events == ["stop", "history"])
+}
+
+@MainActor
 @Test func sourceMetadataRemovalFailureKeepsTheLiveSourceAndCredentials() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
@@ -766,6 +792,11 @@ private actor SourceManagementHistoryStore: PlaybackHistoryStoring {
     private(set) var removedSourceIDs: [UUID] = []
     private var entries: [PlaybackHistoryEntry] = []
     private var shouldFailNextRemove = false
+    private let orderProbe: SourceRemovalOrderProbe?
+
+    init(orderProbe: SourceRemovalOrderProbe? = nil) {
+        self.orderProbe = orderProbe
+    }
 
     func upsert(_ entry: PlaybackHistoryEntry) throws {
         entries.removeAll { $0.mediaID == entry.mediaID }
@@ -774,17 +805,28 @@ private actor SourceManagementHistoryStore: PlaybackHistoryStoring {
 
     func load() throws -> [PlaybackHistoryEntry] { entries }
 
-    func removeAll(sourceID: UUID) throws {
+    func removeAll(sourceID: UUID) async throws {
         if shouldFailNextRemove {
             shouldFailNextRemove = false
             throw SourceManagementPersistenceError.saveFailed
         }
         removedSourceIDs.append(sourceID)
         entries.removeAll { $0.sourceID == sourceID }
+        if let orderProbe {
+            await orderProbe.record("history")
+        }
     }
 
     func failNextRemove() {
         shouldFailNextRemove = true
+    }
+}
+
+private actor SourceRemovalOrderProbe {
+    private(set) var events: [String] = []
+
+    func record(_ event: String) {
+        events.append(event)
     }
 }
 

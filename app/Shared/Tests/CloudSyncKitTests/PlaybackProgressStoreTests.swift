@@ -28,6 +28,22 @@ import Testing
     #expect(try await fixture.store.load().isEmpty)
 }
 
+@Test func scopedRestoreDoesNotLoseConcurrentProgressFromAnotherSource() async throws {
+    let fixture = try ProgressStoreFixture()
+    defer { fixture.cleanup() }
+    let restoredSource = UUID()
+    let concurrentSource = UUID()
+    let restored = try progress(id: "c", sourceID: restoredSource, position: 40)
+    let concurrent = try progress(id: "d", sourceID: concurrentSource, position: 50)
+
+    async let restore: Void = fixture.store.restore([restored], sourceID: restoredSource)
+    async let upsert: Void = fixture.store.upsert(concurrent)
+    _ = try await (restore, upsert)
+
+    #expect(try await fixture.store.progress(mediaID: restored.mediaID) == restored)
+    #expect(try await fixture.store.progress(mediaID: concurrent.mediaID) == concurrent)
+}
+
 private struct ProgressStoreFixture {
     let directory: URL
     let fileURL: URL

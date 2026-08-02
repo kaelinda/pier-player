@@ -49,6 +49,42 @@ import Testing
 }
 
 @MainActor
+@Test func concurrentStopsAwaitTheSameProgressFlush() async throws {
+    let progress = SuspendedStopProgressManager()
+    let coordinator = ModelTestCoordinator()
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress
+    )
+    await model.start()
+    try await waitForModel(model) { $0.state == .playing }
+    var requestIterator = progress.recordRequests.makeAsyncIterator()
+    var completions = 0
+
+    let firstStop = Task { @MainActor in
+        await model.stop()
+        completions += 1
+    }
+    _ = await requestIterator.next()
+    let secondStop = Task { @MainActor in
+        await model.stop()
+        completions += 1
+    }
+    await Task.yield()
+    #expect(completions == 0)
+
+    await progress.releaseRecord()
+    await firstStop.value
+    await secondStop.value
+    #expect(completions == 2)
+    #expect(await progress.recordCount == 1)
+    #expect(coordinator.stopCount == 1)
+}
+
+@MainActor
 @Test func modelRecordsHistoryOnlyAfterPlaybackStartsSuccessfully() async throws {
     let item = testVideoItem()
     let file = ModelTestFile(size: 1_024)
@@ -907,6 +943,42 @@ private actor SuspendedModelProgressManager: PlaybackProgressManaging {
     func releaseRestore() {
         restoreContinuation?.resume()
         restoreContinuation = nil
+    }
+}
+
+private actor SuspendedStopProgressManager: PlaybackProgressManaging {
+    nonisolated let recordRequests: AsyncStream<Void>
+    private let recordRequestContinuation: AsyncStream<Void>.Continuation
+    private var recordContinuation: CheckedContinuation<Void, Never>?
+    private(set) var recordCount = 0
+
+    init() {
+        let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        recordRequests = stream.stream
+        recordRequestContinuation = stream.continuation
+    }
+
+    func progress(mediaID: String) -> PlaybackProgress? { nil }
+
+    func record(
+        mediaID: String,
+        sourceID: UUID,
+        position: TimeInterval,
+        duration: TimeInterval,
+        force: Bool
+    ) async {
+        recordCount += 1
+        recordRequestContinuation.yield()
+        await withCheckedContinuation { recordContinuation = $0 }
+    }
+
+    func allProgress() -> [PlaybackProgress] { [] }
+    func replaceAll(_ progress: [PlaybackProgress]) {}
+    func removeAll(sourceID: UUID) {}
+
+    func releaseRecord() {
+        recordContinuation?.resume()
+        recordContinuation = nil
     }
 }
 

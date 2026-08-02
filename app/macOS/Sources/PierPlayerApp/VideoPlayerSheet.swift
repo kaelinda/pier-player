@@ -9,6 +9,9 @@ struct VideoPlayerSheet: View {
     @StateObject private var playerModel: VideoPlayerModel
     @Environment(\.dismiss) private var dismiss
     private let onStopped: @MainActor @Sendable () -> Void
+    private let activePlayback: ActivePlaybackLifecycle?
+    private let sourceID: UUID?
+    @State private var activePlaybackToken: UUID?
 
     @MainActor
     init(
@@ -20,10 +23,13 @@ struct VideoPlayerSheet: View {
         progressManager: (any PlaybackProgressManaging)? = nil,
         historyStore: (any PlaybackHistoryStoring)? = nil,
         sourceDisplayName: String? = nil,
+        activePlayback: ActivePlaybackLifecycle? = nil,
         onStopped: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.item = item
         self.onStopped = onStopped
+        self.activePlayback = activePlayback
+        self.sourceID = source.id
         _playerModel = StateObject(
             wrappedValue: VideoPlayerModel(
                 item: item,
@@ -45,6 +51,8 @@ struct VideoPlayerSheet: View {
     ) {
         self.item = item
         self.onStopped = onStopped
+        self.activePlayback = nil
+        self.sourceID = nil
         _playerModel = StateObject(wrappedValue: playerModel)
     }
 
@@ -65,9 +73,19 @@ struct VideoPlayerSheet: View {
         .task {
             await playerModel.start()
         }
+        .onAppear {
+            guard let activePlayback, let sourceID else { return }
+            activePlaybackToken = activePlayback.register(sourceID: sourceID) {
+                await playerModel.stop()
+            }
+        }
         .onDisappear {
             Task {
-                await playerModel.stop()
+                if let activePlayback, let activePlaybackToken {
+                    await activePlayback.stop(token: activePlaybackToken)
+                } else {
+                    await playerModel.stop()
+                }
                 onStopped()
             }
         }

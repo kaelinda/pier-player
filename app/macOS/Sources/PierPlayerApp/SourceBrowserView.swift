@@ -51,6 +51,7 @@ struct SourceBrowserView: View {
                     progressManager: diagnostics.progressManager,
                     historyStore: diagnostics.historyStore,
                     sourceDisplayName: connectedSource.displayName,
+                    activePlayback: diagnostics.activePlayback,
                     onStopped: model.publishContinuityRevision
                 )
             }

@@ -54,6 +54,8 @@ final class VideoPlayerModel: ObservableObject {
     private var canPersistProgress = false
     private var terminalFlushTask: Task<Void, Never>?
     private var terminalFlushSessionID: UUID?
+    private var stopTask: Task<Void, Never>?
+    private var stopSessionID: UUID?
 
     init(
         item: MediaSourceItem,
@@ -188,8 +190,26 @@ final class VideoPlayerModel: ObservableObject {
     }
 
     func stop() async {
+        if let stopTask {
+            await stopTask.value
+            return
+        }
         guard hasStarted, let sessionID = activeSessionID else { return }
         hasStarted = false
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await performStop(sessionID: sessionID)
+        }
+        stopTask = task
+        stopSessionID = sessionID
+        await task.value
+        if stopSessionID == sessionID {
+            stopTask = nil
+            stopSessionID = nil
+        }
+    }
+
+    private func performStop(sessionID: UUID) async {
         if terminalFlushSessionID == sessionID, let terminalFlushTask {
             await terminalFlushTask.value
         } else {

@@ -51,6 +51,11 @@ public actor PlaybackProgressStore {
         try save(values)
     }
 
+    public func restore(_ snapshot: [PlaybackProgress], sourceID: UUID) throws {
+        let current = try load()
+        try save(current.filter { $0.sourceID != sourceID } + snapshot)
+    }
+
     private func save(_ values: [PlaybackProgress]) throws {
         let sorted = values.sorted { $0.mediaID < $1.mediaID }
         try encoder.encode(sorted).write(to: fileURL, options: .atomic)

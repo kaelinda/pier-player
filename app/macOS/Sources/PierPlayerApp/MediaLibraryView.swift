@@ -173,6 +173,7 @@ struct MediaLibraryView: View {
                 progressManager: diagnostics.progressManager,
                 historyStore: diagnostics.historyStore,
                 sourceDisplayName: selection.source.displayName,
+                activePlayback: diagnostics.activePlayback,
                 onStopped: model.publishContinuityRevision
             )
         }

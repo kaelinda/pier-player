@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
         let identityProvider: (any DiagnosticIdentityProviding)?
         let progressManager: (any PlaybackProgressManaging)?
         let historyStore: (any PlaybackHistoryStoring)?
+        let activePlayback: ActivePlaybackLifecycle
     }
 
     struct ConnectedSource: Identifiable {
@@ -69,8 +70,9 @@ final class AppModel: ObservableObject {
     private let identityProvider: (any DiagnosticIdentityProviding)?
     private let sourceFactory: SourceFactory?
     private let syncCoordinator: (any CloudSyncCoordinating)?
-    private let progressManager: (any PlaybackProgressManaging)?
+    private let progressManager: (any PlaybackProgressCleanupManaging)?
     private let historyStore: (any PlaybackHistoryStoring)?
+    private let activePlayback: ActivePlaybackLifecycle
 
     init(
         playbackSession: PlaybackSession = PlaybackSession(),
@@ -81,8 +83,9 @@ final class AppModel: ObservableObject {
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
         sourceFactory: SourceFactory? = nil,
         syncCoordinator: (any CloudSyncCoordinating)? = nil,
-        progressManager: (any PlaybackProgressManaging)? = nil,
-        historyStore: (any PlaybackHistoryStoring)? = nil
+        progressManager: (any PlaybackProgressCleanupManaging)? = nil,
+        historyStore: (any PlaybackHistoryStoring)? = nil,
+        activePlayback: ActivePlaybackLifecycle = ActivePlaybackLifecycle()
     ) {
         self.playbackSession = playbackSession
         self.credentialStore = credentialStore
@@ -100,6 +103,7 @@ final class AppModel: ObservableObject {
         self.syncCoordinator = syncCoordinator
         self.progressManager = progressManager
         self.historyStore = historyStore ?? (try? PlaybackHistoryStore())
+        self.activePlayback = activePlayback
     }
 
     func restore() async {
@@ -477,6 +481,7 @@ final class AppModel: ObservableObject {
         guard configuredSources.contains(where: { $0.id == id }) else {
             throw SMBSourceRemovalError.sourceNotFound
         }
+        await activePlayback.stopActive(sourceID: id)
         let storedSources: [SMBStorageSource]
         do {
             storedSources = try await sourceStore.load()
@@ -493,15 +498,7 @@ final class AppModel: ObservableObject {
             throw SMBSourceRemovalError.changesNotSaved
         }
 
-        let progressCleanup: (any PlaybackProgressCleanupManaging)?
-        if let progressManager {
-            guard let strictCleanup = progressManager as? any PlaybackProgressCleanupManaging else {
-                throw SMBSourceRemovalError.changesNotSaved
-            }
-            progressCleanup = strictCleanup
-        } else {
-            progressCleanup = nil
-        }
+        let progressCleanup = progressManager
         let storedProgress: [PlaybackProgress]
         let storedHistory: [PlaybackHistoryEntry]
         do {
@@ -596,7 +593,8 @@ final class AppModel: ObservableObject {
             ),
             identityProvider: identityProvider,
             progressManager: progressManager,
-            historyStore: historyStore
+            historyStore: historyStore,
+            activePlayback: activePlayback
         )
     }
 

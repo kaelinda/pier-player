@@ -116,10 +116,7 @@ public actor PlaybackProgressManager: PlaybackProgressCleanupManaging {
         _ snapshot: [PlaybackProgress],
         sourceID: UUID
     ) async throws {
-        let current = try await store.load()
-        try await store.replaceAll(
-            current.filter { $0.sourceID != sourceID } + snapshot
-        )
+        try await store.restore(snapshot, sourceID: sourceID)
         lastSavedAt = lastSavedAt.filter { $0.value.sourceID != sourceID }
     }
 }
