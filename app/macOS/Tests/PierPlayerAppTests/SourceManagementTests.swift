@@ -357,6 +357,70 @@ import Testing
 }
 
 @MainActor
+@Test func removingSourceClearsPlaybackContinuityAfterPersistentRemoval() async throws {
+    let sourceStore = SourceManagementSourceStore()
+    let credentialStore = SourceManagementCredentialStore()
+    let factory = SourceManagementSourceFactory()
+    let progressManager = SourceManagementProgressManager()
+    let historyStore = SourceManagementHistoryStore()
+    let model = AppModel(
+        credentialStore: credentialStore,
+        sourceStore: sourceStore,
+        sourceFactory: factory.makeSource,
+        progressManager: progressManager,
+        historyStore: historyStore
+    )
+    try await addExistingSource(to: model)
+    let sourceID = try #require(model.sources.first?.id)
+
+    try await model.removeSource(id: sourceID)
+
+    #expect(await progressManager.removedSourceIDs == [sourceID])
+    #expect(await historyStore.removedSourceIDs == [sourceID])
+}
+
+@MainActor
+@Test func playbackDependenciesUseTheAppOwnedHistoryStore() async throws {
+    let historyStore = SourceManagementHistoryStore()
+    let model = AppModel(historyStore: historyStore)
+
+    let dependencies = model.makePlaybackDiagnosticDependencies()
+    try await dependencies.historyStore?.removeAll(sourceID: UUID())
+
+    #expect(await historyStore.removedSourceIDs.count == 1)
+}
+
+@MainActor
+@Test func continuityRevisionChangesAfterSourceAddEditAndRemoval() async throws {
+    let fixture = try SourceManagementModelFixture()
+    let model = fixture.model
+
+    #expect(model.continuityRevision == 0)
+    try await addExistingSource(to: model)
+    #expect(model.continuityRevision == 1)
+
+    let sourceID = try #require(model.sources.first?.id)
+    try await updateExistingSource(id: sourceID, in: model)
+    #expect(model.continuityRevision == 2)
+
+    try await model.removeSource(id: sourceID)
+    #expect(model.continuityRevision == 3)
+}
+
+@MainActor
+@Test func continuityRevisionChangesAfterSyncEvenWhenSourcesAreUnchanged() async {
+    let model = AppModel(
+        credentialStore: SourceManagementCredentialStore(),
+        sourceStore: SourceManagementSourceStore(),
+        syncCoordinator: RecordingSyncCoordinator()
+    )
+
+    await model.synchronizeSources()
+
+    #expect(model.continuityRevision == 1)
+}
+
+@MainActor
 @Test func sourceMetadataRemovalFailureKeepsTheLiveSourceAndCredentials() async throws {
     let fixture = try SourceManagementModelFixture()
     let model = fixture.model
@@ -524,6 +588,30 @@ private actor RecordingSyncCoordinator: CloudSyncCoordinating {
     func synchronize(local: CloudSyncSnapshot) -> CloudSyncSnapshot {
         local
     }
+}
+
+private actor SourceManagementProgressManager: PlaybackProgressManaging {
+    private(set) var removedSourceIDs: [UUID] = []
+
+    func progress(mediaID: String) -> PlaybackProgress? { nil }
+    func record(
+        mediaID: String,
+        sourceID: UUID,
+        position: TimeInterval,
+        duration: TimeInterval,
+        force: Bool
+    ) {}
+    func allProgress() -> [PlaybackProgress] { [] }
+    func replaceAll(_ progress: [PlaybackProgress]) {}
+    func removeAll(sourceID: UUID) { removedSourceIDs.append(sourceID) }
+}
+
+private actor SourceManagementHistoryStore: PlaybackHistoryStoring {
+    private(set) var removedSourceIDs: [UUID] = []
+
+    func upsert(_ entry: PlaybackHistoryEntry) throws {}
+    func load() throws -> [PlaybackHistoryEntry] { [] }
+    func removeAll(sourceID: UUID) throws { removedSourceIDs.append(sourceID) }
 }
 
 private actor SourceManagementSourceStore: SMBSourceStoring {

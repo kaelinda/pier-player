@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
         let context: DiagnosticContext
         let identityProvider: (any DiagnosticIdentityProviding)?
         let progressManager: (any PlaybackProgressManaging)?
+        let historyStore: (any PlaybackHistoryStoring)?
     }
 
     struct ConnectedSource: Identifiable {
@@ -57,6 +58,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var configuredSources: [ConfiguredSource] = []
     @Published private(set) var isRestoring = true
     @Published private(set) var sourceRevision = 0
+    @Published private(set) var continuityRevision = 0
 
     let playbackSession: PlaybackSession
     private let credentialStore: any SMBCredentialStore
@@ -67,6 +69,7 @@ final class AppModel: ObservableObject {
     private let sourceFactory: SourceFactory?
     private let syncCoordinator: (any CloudSyncCoordinating)?
     private let progressManager: (any PlaybackProgressManaging)?
+    private let historyStore: (any PlaybackHistoryStoring)?
 
     init(
         playbackSession: PlaybackSession = PlaybackSession(),
@@ -77,7 +80,8 @@ final class AppModel: ObservableObject {
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
         sourceFactory: SourceFactory? = nil,
         syncCoordinator: (any CloudSyncCoordinating)? = nil,
-        progressManager: (any PlaybackProgressManaging)? = nil
+        progressManager: (any PlaybackProgressManaging)? = nil,
+        historyStore: (any PlaybackHistoryStoring)? = nil
     ) {
         self.playbackSession = playbackSession
         self.credentialStore = credentialStore
@@ -94,6 +98,7 @@ final class AppModel: ObservableObject {
         self.sourceFactory = sourceFactory
         self.syncCoordinator = syncCoordinator
         self.progressManager = progressManager
+        self.historyStore = historyStore ?? (try? PlaybackHistoryStore())
     }
 
     func restore() async {
@@ -197,6 +202,7 @@ final class AppModel: ObservableObject {
     func synchronizeSources() async {
         guard let syncCoordinator,
               let stored = try? await sourceStore.load() else { return }
+        defer { continuityRevision &+= 1 }
         let localProgress = await progressManager?.allProgress() ?? []
         let local = CloudSyncSnapshot(
             sources: stored.map(\.syncedSource),
@@ -284,6 +290,7 @@ final class AppModel: ObservableObject {
             ))
             await syncCoordinator?.enqueue(.upsertSource(storedSource.syncedSource))
             sourceRevision &+= 1
+            continuityRevision &+= 1
         } catch {
             await source.disconnect()
             throw error
@@ -381,6 +388,7 @@ final class AppModel: ObservableObject {
             configuration: configuration
         )
         sourceRevision &+= 1
+        continuityRevision &+= 1
         replaceConfigured(
             configuration: configuration,
             username: credential.username,
@@ -460,6 +468,7 @@ final class AppModel: ObservableObject {
             state: .connected
         )
         sourceRevision &+= 1
+        continuityRevision &+= 1
         await syncCoordinator?.enqueue(.upsertSource(updatedStorage.syncedSource))
     }
 
@@ -510,8 +519,11 @@ final class AppModel: ObservableObject {
             await source.source.disconnect()
         }
         configuredSources.removeAll { $0.id == id }
+        await progressManager?.removeAll(sourceID: id)
+        try? await historyStore?.removeAll(sourceID: id)
         await syncCoordinator?.enqueue(.deleteSource(id: id, modifiedAt: Date()))
         sourceRevision &+= 1
+        continuityRevision &+= 1
     }
 
     func source(id: UUID?) -> ConnectedSource? {
@@ -532,7 +544,8 @@ final class AppModel: ObservableObject {
                 parentOperationID: diagnosticContext.operationID
             ),
             identityProvider: identityProvider,
-            progressManager: progressManager
+            progressManager: progressManager,
+            historyStore: historyStore
         )
     }
 
