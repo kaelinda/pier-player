@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 enum MediaLibrarySectionKind: Hashable {
+    case continueWatching
+    case recentlyPlayed
     case recentlyAdded
     case allVideos
     case fileSources
@@ -32,6 +34,8 @@ struct MediaLibrarySummary: Equatable {
         switch (videoCount, sourceCount) {
         case (0, 0):
             secondaryText = "Connect a source to begin"
+        case (_, 0):
+            secondaryText = "Saved playback history"
         case (_, 1):
             secondaryText = "From 1 source"
         default:
@@ -69,11 +73,14 @@ struct MediaLibraryContentState: Equatable {
         sourceCount: Int,
         itemCount: Int,
         filteredItemCount: Int,
+        continueWatchingCount: Int = 0,
+        recentlyPlayedCount: Int = 0,
         hasQuery: Bool,
         isRestoring: Bool,
         isScanning: Bool
     ) -> MediaLibraryContentState {
-        guard itemCount > 0 else {
+        let hasContinuity = continueWatchingCount > 0 || recentlyPlayedCount > 0
+        guard itemCount > 0 || (!hasQuery && hasContinuity) else {
             if isRestoring {
                 return MediaLibraryContentState(mode: .restoring, compactActivity: nil)
             }
@@ -89,13 +96,17 @@ struct MediaLibraryContentState: Equatable {
             return MediaLibraryContentState(mode: .content(sections), compactActivity: nil)
         }
 
-        let sections: [MediaLibrarySectionKind]
+        var sections: [MediaLibrarySectionKind]
         if hasQuery {
             sections = filteredItemCount > 0
                 ? [.searchResults]
                 : [.noSearchResults, .fileSources]
         } else {
-            sections = [.recentlyAdded, .allVideos, .fileSources]
+            sections = []
+            if continueWatchingCount > 0 { sections.append(.continueWatching) }
+            if recentlyPlayedCount > 0 { sections.append(.recentlyPlayed) }
+            if itemCount > 0 { sections.append(.recentlyAdded) }
+            sections.append(contentsOf: [.allVideos, .fileSources])
         }
 
         let compactActivity: MediaLibraryCompactActivity?
@@ -120,6 +131,7 @@ struct MediaLibraryView: View {
     let addSource: () -> Void
 
     @StateObject private var viewModel = MediaLibraryViewModel()
+    @StateObject private var continuityModel = MediaLibraryContinuityModel()
     @State private var query = ""
     @State private var refreshGeneration = 0
     @State private var playerSelection: MediaLibraryPlayerSelection?
@@ -127,6 +139,7 @@ struct MediaLibraryView: View {
     var body: some View {
         MediaLibraryContentView(
             snapshot: viewModel.snapshot,
+            continuity: continuityModel.input,
             sourceSummaries: model.mediaLibrarySourceSummaries,
             isRestoring: model.isRestoring,
             isScanning: viewModel.isLoading,
@@ -156,6 +169,11 @@ struct MediaLibraryView: View {
         }
         .task(id: reloadRequest) {
             await viewModel.reload(sources: model.mediaLibrarySources)
+        }
+        .task(id: model.continuityRevision) {
+            await continuityModel.reload {
+                await model.loadMediaLibraryContinuity()
+            }
         }
         .onChange(of: model.sources.map(\.id)) { _, sourceIDs in
             if let playerSelection, !sourceIDs.contains(playerSelection.source.id) {
@@ -204,6 +222,7 @@ private struct MediaLibraryPlayerSelection: Identifiable {
 
 struct MediaLibraryContentView: View {
     let snapshot: MediaLibrarySnapshot
+    let continuity: MediaLibraryContinuityInput
     let sourceSummaries: [MediaLibrarySourceSummary]
     let isRestoring: Bool
     let isScanning: Bool
@@ -224,8 +243,21 @@ struct MediaLibraryContentView: View {
         MediaLibraryPresentation.recentlyAdded(snapshot.items)
     }
 
-    private var allItems: [MediaLibraryItem] {
-        MediaLibraryPresentation.allVideos(snapshot.items)
+    private var projection: MediaLibraryProjection {
+        MediaLibraryPresentation.project(
+            scannedItems: snapshot.items,
+            history: continuity.history,
+            progress: continuity.progress,
+            configuredSourceIDs: continuity.configuredSourceIDs,
+            connectedSourceIDs: continuity.connectedSourceIDs
+        )
+    }
+
+    private var filteredProjectedItems: [MediaLibraryProjectedItem] {
+        MediaLibraryPresentation.searchResults(
+            projectedItems: projection.allVideos,
+            matching: filteredItems
+        )
     }
 
     private var sortedFailures: [MediaLibraryScanFailure] {
@@ -243,6 +275,8 @@ struct MediaLibraryContentView: View {
             sourceCount: sourceSummaries.count,
             itemCount: snapshot.items.count,
             filteredItemCount: filteredItems.count,
+            continueWatchingCount: projection.continueWatching.count,
+            recentlyPlayedCount: projection.recentlyPlayed.count,
             hasQuery: !trimmedQuery.isEmpty,
             isRestoring: isRestoring,
             isScanning: isScanning
@@ -251,7 +285,7 @@ struct MediaLibraryContentView: View {
 
     private var summary: MediaLibrarySummary {
         MediaLibrarySummary(
-            videoCount: snapshot.items.count,
+            videoCount: projection.allVideos.count,
             sourceCount: sourceSummaries.count
         )
     }
@@ -339,18 +373,47 @@ struct MediaLibraryContentView: View {
     @ViewBuilder
     private func contentSection(_ section: MediaLibrarySectionKind) -> some View {
         switch section {
+        case .continueWatching:
+            continuitySection(title: "Continue Watching", items: projection.continueWatching)
+        case .recentlyPlayed:
+            continuitySection(title: "Recently Played", items: projection.recentlyPlayed)
         case .recentlyAdded:
             recentSection
         case .allVideos:
-            allVideosSection(items: allItems, title: "All Videos")
+            allVideosSection(items: projection.allVideos, title: "All Videos")
         case .fileSources:
             sourcesSection
         case .searchResults:
-            allVideosSection(items: filteredItems, title: "Search Results")
+            allVideosSection(items: filteredProjectedItems, title: "Search Results")
         case .noSearchResults:
             noResultsState
         case .noVideos:
             noVideosState
+        }
+    }
+
+    private func continuitySection(
+        title: String,
+        items: [MediaLibraryProjectedItem]
+    ) -> some View {
+        MediaLibrarySection(title: title, count: items.count) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 16) {
+                    ForEach(items) { item in
+                        ContinuityMediaCard(item: item) {
+                            perform(MediaLibraryContinuityAction.route(for: item))
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func perform(_ action: MediaLibraryContinuityAction) {
+        switch action {
+        case let .play(item): play(item)
+        case let .openSource(sourceID): openSource(sourceID)
         }
     }
 
@@ -370,7 +433,7 @@ struct MediaLibraryContentView: View {
     }
 
     private func allVideosSection(
-        items: [MediaLibraryItem],
+        items: [MediaLibraryProjectedItem],
         title: String
     ) -> some View {
         MediaLibrarySection(title: title, count: items.count) {
@@ -387,7 +450,7 @@ struct MediaLibraryContentView: View {
             ) {
                 ForEach(items) { item in
                     PosterMediaCard(item: item) {
-                        play(item)
+                        perform(MediaLibraryContinuityAction.route(for: item))
                     }
                 }
             }
@@ -455,6 +518,26 @@ struct MediaLibraryContentView: View {
     }
 }
 
+@MainActor
+final class MediaLibraryContinuityModel: ObservableObject {
+    @Published private(set) var input: MediaLibraryContinuityInput
+    private var reloadGeneration = 0
+
+    init(input: MediaLibraryContinuityInput = .empty) {
+        self.input = input
+    }
+
+    func reload(
+        using load: () async -> MediaLibraryContinuityInput
+    ) async {
+        reloadGeneration &+= 1
+        let generation = reloadGeneration
+        let loaded = await load()
+        guard !Task.isCancelled, generation == reloadGeneration else { return }
+        input = loaded
+    }
+}
+
 private struct MediaLibraryReloadRequest: Hashable {
     let sourceIDs: [UUID]
     let sourceRevision: Int
@@ -478,6 +561,138 @@ private struct MediaLibrarySection<Content: View>: View {
             }
             content
         }
+    }
+}
+
+enum MediaLibraryContinuityAction: Equatable {
+    case play(MediaLibraryItem)
+    case openSource(UUID)
+
+    static func route(for item: MediaLibraryProjectedItem) -> Self {
+        item.isAvailable ? .play(item.item) : .openSource(item.item.sourceID)
+    }
+}
+
+struct ContinuityCardPresentation: Equatable {
+    let progressText: String?
+    let badgeText: String?
+    let availabilityText: String?
+    let showsProgressBar: Bool
+    let showsStatusBackground: Bool
+
+    init(item: MediaLibraryProjectedItem) {
+        if item.progress != nil, !item.isWatched {
+            progressText = "\(Int((item.progressRatio * 100).rounded()))%"
+            showsProgressBar = true
+        } else {
+            progressText = nil
+            showsProgressBar = false
+        }
+        badgeText = item.isWatched ? "Watched" : nil
+        availabilityText = item.isAvailable ? nil : "Unavailable"
+        showsStatusBackground = badgeText != nil || availabilityText != nil
+    }
+}
+
+enum ContinuityCardMotion {
+    static func hoverOffset(isHovering: Bool, reduceMotion: Bool) -> CGFloat {
+        isHovering && !reduceMotion ? -2 : 0
+    }
+
+    static func hoverScale(isHovering: Bool, reduceMotion: Bool) -> CGFloat {
+        isHovering && !reduceMotion ? 1.012 : 1
+    }
+}
+
+private struct ContinuityMediaCard: View {
+    let item: MediaLibraryProjectedItem
+    let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    private var presentation: ContinuityCardPresentation {
+        ContinuityCardPresentation(item: item)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                MediaArtwork(item: item.item)
+                    .frame(width: 248, height: 140)
+                    .overlay(alignment: .bottom) {
+                        if presentation.showsProgressBar {
+                            ProgressView(value: item.progressRatio)
+                                .progressViewStyle(.linear)
+                                .tint(item.isWatched ? .green : .accentColor)
+                                .padding(.horizontal, 8)
+                                .padding(.bottom, 7)
+                        }
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if presentation.showsStatusBackground {
+                            HStack(spacing: 6) {
+                                if let badgeText = presentation.badgeText {
+                                    Label(badgeText, systemImage: "checkmark.circle.fill")
+                                }
+                                if let availabilityText = presentation.availabilityText {
+                                    Label(availabilityText, systemImage: "wifi.slash")
+                                }
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .padding(7)
+                            .foregroundStyle(.white)
+                            .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 6))
+                            .padding(8)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(isFocused ? Color.accentColor : .white.opacity(0.14))
+                    }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(MediaLibraryPresentation.displayTitle(for: item.item))
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    HStack(spacing: 6) {
+                        Text(item.item.sourceName)
+                            .lineLimit(1)
+                        if let progressText = presentation.progressText {
+                            Text(progressText).monospacedDigit()
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 248, alignment: .leading)
+        }
+        .buttonStyle(MediaCardButtonStyle())
+        .focused($isFocused)
+        .onHover { isHovering = $0 }
+        .offset(y: ContinuityCardMotion.hoverOffset(
+            isHovering: isHovering,
+            reduceMotion: reduceMotion
+        ))
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(MediaLibraryPresentation.displayTitle(for: item.item)), \(item.item.sourceName)"
+        )
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint(
+            item.isAvailable ? "Opens the video player" : "Opens source reconnection"
+        )
+    }
+
+    private var accessibilityValue: String {
+        [presentation.badgeText, presentation.availabilityText, presentation.progressText]
+            .compactMap { $0 }
+            .joined(separator: ", ")
     }
 }
 
@@ -520,8 +735,14 @@ private struct RecentMediaCard: View {
         .buttonStyle(MediaCardButtonStyle())
         .focused($isFocused)
         .onHover { isHovering = $0 }
-        .offset(y: isHovering ? -2 : 0)
-        .scaleEffect(isHovering ? 1.012 : 1)
+        .offset(y: ContinuityCardMotion.hoverOffset(
+            isHovering: isHovering,
+            reduceMotion: reduceMotion
+        ))
+        .scaleEffect(ContinuityCardMotion.hoverScale(
+            isHovering: isHovering,
+            reduceMotion: reduceMotion
+        ))
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
@@ -561,17 +782,21 @@ private struct RecentMediaCard: View {
 }
 
 private struct PosterMediaCard: View {
-    let item: MediaLibraryItem
+    let item: MediaLibraryProjectedItem
     let action: () -> Void
 
     @State private var isHovering = false
     @FocusState private var isFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var presentation: ContinuityCardPresentation {
+        ContinuityCardPresentation(item: item)
+    }
+
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 8) {
-                MediaArtwork(item: item)
+                MediaArtwork(item: item.item)
                     .aspectRatio(2 / 3, contentMode: .fit)
                     .shadow(
                         color: PierPlayerTheme.accent.opacity(isHovering ? 0.18 : 0),
@@ -585,6 +810,31 @@ private struct PosterMediaCard: View {
                                 lineWidth: isFocused ? 2 : 1
                             )
                     }
+                    .overlay(alignment: .bottom) {
+                        if presentation.showsProgressBar {
+                            ProgressView(value: item.progressRatio)
+                                .progressViewStyle(.linear)
+                                .padding(.horizontal, 7)
+                                .padding(.bottom, 7)
+                        }
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if presentation.showsStatusBackground {
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let badgeText = presentation.badgeText {
+                                    Label(badgeText, systemImage: "checkmark.circle.fill")
+                                }
+                                if let availabilityText = presentation.availabilityText {
+                                    Label(availabilityText, systemImage: "wifi.slash")
+                                }
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .padding(6)
+                            .foregroundStyle(.white)
+                            .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 6))
+                            .padding(7)
+                        }
+                    }
                     .overlay {
                         if isHovering {
                             playOverlay
@@ -593,15 +843,20 @@ private struct PosterMediaCard: View {
                     }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(MediaLibraryPresentation.displayTitle(for: item))
+                    Text(MediaLibraryPresentation.displayTitle(for: item.item))
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(item.sourceName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    HStack(spacing: 5) {
+                        Text(item.item.sourceName)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let progressText = presentation.progressText {
+                            Text(progressText).monospacedDigit()
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -609,12 +864,21 @@ private struct PosterMediaCard: View {
         .buttonStyle(MediaCardButtonStyle())
         .focused($isFocused)
         .onHover { isHovering = $0 }
-        .offset(y: isHovering ? -2 : 0)
-        .scaleEffect(isHovering ? 1.012 : 1)
+        .offset(y: ContinuityCardMotion.hoverOffset(
+            isHovering: isHovering,
+            reduceMotion: reduceMotion
+        ))
+        .scaleEffect(ContinuityCardMotion.hoverScale(
+            isHovering: isHovering,
+            reduceMotion: reduceMotion
+        ))
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Opens the video player")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint(
+            item.isAvailable ? "Opens the video player" : "Opens source reconnection"
+        )
     }
 
     private var borderColor: Color {
@@ -622,7 +886,7 @@ private struct PosterMediaCard: View {
     }
 
     private var playOverlay: some View {
-        Image(systemName: "play.fill")
+        Image(systemName: item.isAvailable ? "play.fill" : "externaldrive.badge.exclamationmark")
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 36, height: 36)
@@ -631,7 +895,13 @@ private struct PosterMediaCard: View {
     }
 
     private var accessibilityLabel: String {
-        "\(MediaLibraryPresentation.displayTitle(for: item)), \(item.sourceName)"
+        "\(MediaLibraryPresentation.displayTitle(for: item.item)), \(item.item.sourceName)"
+    }
+
+    private var accessibilityValue: String {
+        [presentation.badgeText, presentation.availabilityText, presentation.progressText]
+            .compactMap { $0 }
+            .joined(separator: ", ")
     }
 }
 

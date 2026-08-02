@@ -373,6 +373,47 @@ struct MediaLibraryPresentationTests {
         #expect(changedProjection.effectiveResumePosition == 0)
         #expect(changedProjection.progressRatio == 0)
         #expect(changedProjection.isCompleted == false)
+        #expect(result.allVideos.map(\.mediaID) == [mediaID(for: changedItem)])
+        #expect(result.continueWatching.isEmpty)
+        #expect(result.recentlyPlayed.isEmpty)
+    }
+
+    @Test func projectedSearchResultsExcludeReplacedHistoryAtTheSamePath() throws {
+        let sourceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let oldItem = item(
+            name: "Movie.mkv",
+            path: "/Movie.mkv",
+            sourceID: sourceID,
+            size: 100,
+            modifiedAt: date(100)
+        )
+        let replacement = item(
+            name: "Movie.mkv",
+            path: "/Movie.mkv",
+            sourceID: sourceID,
+            size: 200,
+            modifiedAt: date(200)
+        )
+        let projection = MediaLibraryPresentation.project(
+            scannedItems: [replacement],
+            history: [
+                try historyEntry(
+                    mediaID: mediaID(for: oldItem),
+                    item: oldItem,
+                    lastPlayedAt: date(300)
+                ),
+            ],
+            progress: [],
+            configuredSourceIDs: [sourceID],
+            connectedSourceIDs: [sourceID]
+        )
+
+        let results = MediaLibraryPresentation.searchResults(
+            projectedItems: projection.allVideos,
+            matching: [replacement]
+        )
+
+        #expect(results.map(\.item) == [replacement])
     }
 
     @Test func scannedItemsWithoutSizeRemainVisibleButCannotJoinProgress() throws {

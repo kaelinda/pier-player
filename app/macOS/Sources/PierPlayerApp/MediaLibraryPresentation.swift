@@ -7,12 +7,14 @@ struct MediaPosterStyle: Equatable, Sendable {
     let symbolIndex: Int
 }
 
-struct MediaLibraryProjectedItem: Equatable, Sendable {
+struct MediaLibraryProjectedItem: Equatable, Identifiable, Sendable {
     let mediaID: String?
     let item: MediaLibraryItem
     let lastPlayedAt: Date?
     let progress: PlaybackProgress?
     let isAvailable: Bool
+
+    var id: String { mediaID ?? item.id }
 
     var effectiveResumePosition: TimeInterval {
         progress?.effectiveResumePosition ?? 0
@@ -36,6 +38,20 @@ struct MediaLibraryProjection: Equatable, Sendable {
     let continueWatching: [MediaLibraryProjectedItem]
     let recentlyPlayed: [MediaLibraryProjectedItem]
     let allVideos: [MediaLibraryProjectedItem]
+}
+
+struct MediaLibraryContinuityInput: Equatable, Sendable {
+    let history: [PlaybackHistoryEntry]
+    let progress: [PlaybackProgress]
+    let configuredSourceIDs: Set<UUID>
+    let connectedSourceIDs: Set<UUID>
+
+    static let empty = MediaLibraryContinuityInput(
+        history: [],
+        progress: [],
+        configuredSourceIDs: [],
+        connectedSourceIDs: []
+    )
 }
 
 enum MediaLibraryPresentation {
@@ -103,8 +119,18 @@ enum MediaLibraryPresentation {
         connectedSourceIDs: Set<UUID>
     ) -> MediaLibraryProjection {
         let progressByMediaID = latestProgressByMediaID(progress)
+        let scannedItemIDs = Set(scannedItems.map(\.id))
+        let scannedMediaIDsByItemID = scannedItems.reduce(into: [String: Set<String>]()) {
+            mediaIDsByItemID, item in
+            if let mediaID = mediaID(for: item) {
+                mediaIDsByItemID[item.id, default: []].insert(mediaID)
+            }
+        }
         let retainedHistory = history.filter {
-            configuredSourceIDs.contains($0.sourceID)
+            guard configuredSourceIDs.contains($0.sourceID) else { return false }
+            let itemID = mediaLibraryItem(from: $0).id
+            guard scannedItemIDs.contains(itemID) else { return true }
+            return scannedMediaIDsByItemID[itemID]?.contains($0.mediaID) == true
         }
         let historyByMediaID = latestHistoryByMediaID(retainedHistory)
         var projectedByMediaID: [String: MediaLibraryProjectedItem] = [:]
@@ -169,6 +195,14 @@ enum MediaLibraryPresentation {
             recentlyPlayed: recentlyPlayed,
             allVideos: sortedAllVideos
         )
+    }
+
+    static func searchResults(
+        projectedItems: [MediaLibraryProjectedItem],
+        matching scannedItems: [MediaLibraryItem]
+    ) -> [MediaLibraryProjectedItem] {
+        let matches = Set(scannedItems)
+        return projectedItems.filter { matches.contains($0.item) }
     }
 
     static func posterStyle(for item: MediaLibraryItem) -> MediaPosterStyle {

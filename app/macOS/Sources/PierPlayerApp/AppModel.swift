@@ -108,7 +108,10 @@ final class AppModel: ObservableObject {
 
     func restore() async {
         isRestoring = true
-        defer { isRestoring = false }
+        defer {
+            isRestoring = false
+            continuityRevision &+= 1
+        }
         let operation = DiagnosticOperation(
             recorder: diagnosticRecorder,
             parentContext: diagnosticContext,
@@ -600,6 +603,17 @@ final class AppModel: ObservableObject {
 
     func publishContinuityRevision() {
         continuityRevision &+= 1
+    }
+
+    func loadMediaLibraryContinuity() async -> MediaLibraryContinuityInput {
+        let history = (try? await historyStore?.load()) ?? []
+        let progress = await progressManager?.allProgress() ?? []
+        return MediaLibraryContinuityInput(
+            history: history,
+            progress: progress,
+            configuredSourceIDs: Set(configuredSources.map(\.id)),
+            connectedSourceIDs: Set(sources.map(\.id))
+        )
     }
 
     private func restoreContinuity(

@@ -430,6 +430,59 @@ import Testing
 }
 
 @MainActor
+@Test func restorePublishesContinuityRevisionWithoutSyncCoordinator() async throws {
+    let sourceStore = SourceManagementSourceStore()
+    await sourceStore.add(SMBStorageSource(
+        id: UUID(),
+        displayName: "Offline NAS",
+        host: "nas.local",
+        share: "Media"
+    ))
+    let model = AppModel(
+        credentialStore: SourceManagementCredentialStore(),
+        sourceStore: sourceStore,
+        sourceFactory: SourceManagementSourceFactory().makeSource
+    )
+
+    await model.restore()
+
+    #expect(model.continuityRevision == 1)
+    #expect(model.configuredSources.count == 1)
+}
+
+@MainActor
+@Test func mediaLibraryContinuityInputLoadsStoresAndSourceAvailability() async throws {
+    let fixture = try SourceManagementModelFixture()
+    let model = fixture.model
+    try await addExistingSource(to: model)
+    let connectedSourceID = try #require(model.sources.first?.id)
+    let unavailableSourceID = UUID()
+    await fixture.sourceStore.add(SMBStorageSource(
+        id: unavailableSourceID,
+        displayName: "Offline NAS",
+        host: "offline.local",
+        share: "Archive"
+    ))
+    await model.restore()
+    let history = try sourceManagementHistoryEntry(sourceID: connectedSourceID)
+    let progress = try PlaybackProgress(
+        mediaID: history.mediaID,
+        sourceID: connectedSourceID,
+        position: 42,
+        duration: 100
+    )
+    try await fixture.historyStore.upsert(history)
+    await fixture.progressManager.replaceAll([progress])
+
+    let input = await model.loadMediaLibraryContinuity()
+
+    #expect(input.history == [history])
+    #expect(input.progress == [progress])
+    #expect(input.configuredSourceIDs == [connectedSourceID, unavailableSourceID])
+    #expect(input.connectedSourceIDs == [connectedSourceID])
+}
+
+@MainActor
 @Test func historyCleanupFailurePreventsSourceRemoval() async throws {
     let sourceStore = SourceManagementSourceStore()
     let credentialStore = SourceManagementCredentialStore()
@@ -666,6 +719,7 @@ private final class SourceManagementModelFixture {
     let sourceStore = SourceManagementSourceStore()
     let credentialStore = SourceManagementCredentialStore()
     let historyStore = SourceManagementHistoryStore()
+    let progressManager = SourceManagementProgressManager()
     let factory = SourceManagementSourceFactory()
     let model: AppModel
 
@@ -674,6 +728,7 @@ private final class SourceManagementModelFixture {
             credentialStore: credentialStore,
             sourceStore: sourceStore,
             sourceFactory: factory.makeSource,
+            progressManager: progressManager,
             historyStore: historyStore
         )
     }

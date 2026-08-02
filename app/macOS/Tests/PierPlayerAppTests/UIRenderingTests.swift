@@ -1,4 +1,5 @@
 import AppKit
+import CloudSyncKit
 import DiagnosticsKit
 import MediaSourceKit
 import PlaybackCore
@@ -139,6 +140,234 @@ import Testing
     )
 }
 
+@Test func continuitySectionsPrecedeScannedSectionsWhenNotSearching() {
+    let state = MediaLibraryContentState.resolve(
+        sourceCount: 2,
+        itemCount: 4,
+        filteredItemCount: 4,
+        continueWatchingCount: 1,
+        recentlyPlayedCount: 1,
+        hasQuery: false,
+        isRestoring: false,
+        isScanning: false
+    )
+
+    #expect(state.mode == .content([
+        .continueWatching,
+        .recentlyPlayed,
+        .recentlyAdded,
+        .allVideos,
+        .fileSources,
+    ]))
+}
+
+@Test func continuityRemainsVisibleWhenScanIsEmptyButSearchHidesIt() {
+    let continuityOnly = MediaLibraryContentState.resolve(
+        sourceCount: 1,
+        itemCount: 0,
+        filteredItemCount: 0,
+        continueWatchingCount: 1,
+        recentlyPlayedCount: 0,
+        hasQuery: false,
+        isRestoring: false,
+        isScanning: false
+    )
+    #expect(continuityOnly.mode == .content([
+        .continueWatching,
+        .allVideos,
+        .fileSources,
+    ]))
+
+    let searching = MediaLibraryContentState.resolve(
+        sourceCount: 1,
+        itemCount: 4,
+        filteredItemCount: 1,
+        continueWatchingCount: 1,
+        recentlyPlayedCount: 1,
+        hasQuery: true,
+        isRestoring: false,
+        isScanning: false
+    )
+    #expect(searching.mode == .content([.searchResults]))
+}
+
+@Test func continuityCardPresentationAndRoutingAreExplicit() throws {
+    let sourceID = UUID()
+    let item = MediaLibraryItem(
+        sourceID: sourceID,
+        sourceName: "Family NAS",
+        media: MediaSourceItem(
+            name: "Arrival.mkv",
+            path: "/Movies/Arrival.mkv",
+            kind: .file,
+            size: 1_024,
+            modifiedAt: nil
+        )
+    )
+    let progress = try PlaybackProgress(
+        mediaID: String(repeating: "a", count: 64),
+        sourceID: sourceID,
+        position: 42,
+        duration: 100
+    )
+    let available = MediaLibraryProjectedItem(
+        mediaID: progress.mediaID,
+        item: item,
+        lastPlayedAt: Date(),
+        progress: progress,
+        isAvailable: true
+    )
+    let watched = MediaLibraryProjectedItem(
+        mediaID: progress.mediaID,
+        item: item,
+        lastPlayedAt: Date(),
+        progress: try PlaybackProgress(
+            mediaID: progress.mediaID,
+            sourceID: sourceID,
+            position: 96,
+            duration: 100
+        ),
+        isAvailable: false
+    )
+
+    #expect(ContinuityCardPresentation(item: available).progressText == "42%")
+    #expect(ContinuityCardPresentation(item: available).showsProgressBar)
+    #expect(!ContinuityCardPresentation(item: available).showsStatusBackground)
+    #expect(ContinuityCardPresentation(item: watched).badgeText == "Watched")
+    #expect(ContinuityCardPresentation(item: watched).progressText == nil)
+    #expect(!ContinuityCardPresentation(item: watched).showsProgressBar)
+    #expect(ContinuityCardPresentation(item: watched).showsStatusBackground)
+    #expect(ContinuityCardPresentation(item: watched).availabilityText == "Unavailable")
+    #expect(MediaLibraryContinuityAction.route(for: available) == .play(item))
+    #expect(MediaLibraryContinuityAction.route(for: watched) == .openSource(sourceID))
+}
+
+@Test func projectedItemIdentityUsesMediaIdentityForReplacements() {
+    let sourceID = UUID()
+    let item = MediaLibraryItem(
+        sourceID: sourceID,
+        sourceName: "Family NAS",
+        media: MediaSourceItem(
+            name: "Replacement.mkv",
+            path: "/Movies/Replacement.mkv",
+            kind: .file,
+            size: 2_048,
+            modifiedAt: nil
+        )
+    )
+    let first = MediaLibraryProjectedItem(
+        mediaID: String(repeating: "a", count: 64),
+        item: item,
+        lastPlayedAt: nil,
+        progress: nil,
+        isAvailable: true
+    )
+    let replacement = MediaLibraryProjectedItem(
+        mediaID: String(repeating: "b", count: 64),
+        item: item,
+        lastPlayedAt: nil,
+        progress: nil,
+        isAvailable: true
+    )
+    let unidentified = MediaLibraryProjectedItem(
+        mediaID: nil,
+        item: item,
+        lastPlayedAt: nil,
+        progress: nil,
+        isAvailable: true
+    )
+
+    #expect(first.id != replacement.id)
+    #expect(unidentified.id == item.id)
+}
+
+@Test func continuityCardHoverRespectsReduceMotion() {
+    #expect(ContinuityCardMotion.hoverOffset(isHovering: true, reduceMotion: false) == -2)
+    #expect(ContinuityCardMotion.hoverOffset(isHovering: true, reduceMotion: true) == 0)
+    #expect(ContinuityCardMotion.hoverOffset(isHovering: false, reduceMotion: false) == 0)
+    #expect(ContinuityCardMotion.hoverScale(isHovering: true, reduceMotion: false) == 1.012)
+    #expect(ContinuityCardMotion.hoverScale(isHovering: true, reduceMotion: true) == 1)
+    #expect(ContinuityCardMotion.hoverScale(isHovering: false, reduceMotion: false) == 1)
+}
+
+@MainActor
+@Test func cancelledContinuityLoadDoesNotPublishLateResult() async throws {
+    let gate = ContinuityLoadGate()
+    let model = MediaLibraryContinuityModel()
+    let late = try continuityInput(marker: "a")
+
+    let load = Task {
+        await model.reload {
+            await gate.wait(for: late)
+        }
+    }
+    try #require(await eventuallyRendering { await gate.hasWaiter })
+
+    load.cancel()
+    await gate.resume()
+    await load.value
+
+    #expect(model.input == .empty)
+}
+
+@MainActor
+@Test func newestContinuityLoadWinsWhenOlderLoadFinishesLast() async throws {
+    let oldGate = ContinuityLoadGate()
+    let newGate = ContinuityLoadGate()
+    let model = MediaLibraryContinuityModel()
+    let old = try continuityInput(marker: "a")
+    let new = try continuityInput(marker: "b")
+
+    let oldLoad = Task {
+        await model.reload {
+            await oldGate.wait(for: old)
+        }
+    }
+    try #require(await eventuallyRendering { await oldGate.hasWaiter })
+
+    let newLoad = Task {
+        await model.reload {
+            await newGate.wait(for: new)
+        }
+    }
+    try #require(await eventuallyRendering { await newGate.hasWaiter })
+
+    await newGate.resume()
+    await newLoad.value
+    #expect(model.input == new)
+
+    await oldGate.resume()
+    await oldLoad.value
+    #expect(model.input == new)
+}
+
+@MainActor
+@Test func continuityRefreshDoesNotListMediaDirectories() async throws {
+    let listProbe = MediaLibraryListProbe()
+    let source = MediaLibrarySource(id: UUID(), displayName: "NAS") { _ in
+        await listProbe.list()
+    }
+    let scannerModel = MediaLibraryViewModel()
+    let continuityModel = MediaLibraryContinuityModel()
+    let input = try continuityInput(marker: "c")
+    let scan = Task {
+        await scannerModel.reload(sources: [source])
+    }
+    try #require(await eventuallyRendering { await listProbe.hasWaiter })
+
+    await continuityModel.reload {
+        input
+    }
+
+    #expect(continuityModel.input == input)
+    #expect(await listProbe.count == 1)
+    #expect(scannerModel.isLoading)
+
+    await listProbe.resume()
+    await scan.value
+    #expect(await listProbe.count == 1)
+}
+
 @Test func mediaLibrarySummaryAdaptsToLibraryCounts() {
     let empty = MediaLibrarySummary(videoCount: 0, sourceCount: 0)
     #expect(empty.primaryText == "No videos")
@@ -151,6 +380,10 @@ import Testing
     let populated = MediaLibrarySummary(videoCount: 8, sourceCount: 2)
     #expect(populated.primaryText == "8 videos")
     #expect(populated.secondaryText == "Across 2 sources")
+
+    let historyOnly = MediaLibrarySummary(videoCount: 2, sourceCount: 0)
+    #expect(historyOnly.primaryText == "2 videos")
+    #expect(historyOnly.secondaryText == "Saved playback history")
 }
 
 @Test func playbackTimeLabelsUseHoursOnlyWhenNeeded() {
@@ -275,6 +508,7 @@ func populatedMediaLibraryRenders(
     let image = try renderInWindow(
         MediaLibraryContentView(
             snapshot: fixture.snapshot,
+            continuity: .empty,
             sourceSummaries: fixture.sources,
             isRestoring: false,
             isScanning: true,
@@ -296,12 +530,57 @@ func populatedMediaLibraryRenders(
 }
 
 @MainActor
+@Test(arguments: [
+    (CGSize(width: 820, height: 560), "continuity-minimum-dark", true),
+    (CGSize(width: 820, height: 560), "continuity-minimum-light", false),
+    (CGSize(width: 1_120, height: 720), "continuity-default-dark", true),
+    (CGSize(width: 1_120, height: 720), "continuity-default-light", false),
+])
+func continuityMediaLibraryRendersProgressWatchedUnavailableAndPartialFailure(
+    size: CGSize,
+    snapshotName: String,
+    isDark: Bool
+) throws {
+    let fixture = try continuityMediaLibraryFixture()
+    let image = try renderInWindow(
+        MediaLibraryContentView(
+            snapshot: fixture.snapshot,
+            continuity: fixture.continuity,
+            sourceSummaries: fixture.sources,
+            isRestoring: false,
+            isScanning: false,
+            query: "",
+            play: { _ in },
+            openSource: { _ in },
+            addSource: {}
+        )
+        .preferredColorScheme(isDark ? .dark : .light)
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size,
+        appearance: NSAppearance(named: isDark ? .darkAqua : .aqua)
+    )
+
+    #expect(fixture.snapshot.failures.count == 1)
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 8)
+    if isDark {
+        #expect(darkPixelFraction(in: image) > 0.6)
+    } else {
+        #expect(darkPixelFraction(in: image) < 0.6)
+    }
+    try writeSnapshotIfRequested(image, name: snapshotName)
+}
+
+@MainActor
 @Test func populatedMediaLibraryRendersInLightAppearance() throws {
     let size = CGSize(width: 1_120, height: 720)
     let fixture = mediaLibraryFixture()
     let image = try renderInWindow(
         MediaLibraryContentView(
             snapshot: fixture.snapshot,
+            continuity: .empty,
             sourceSummaries: fixture.sources,
             isRestoring: false,
             isScanning: false,
@@ -654,6 +933,156 @@ private func mediaLibraryFixture() -> (
         ),
         sources
     )
+}
+
+private func continuityMediaLibraryFixture() throws -> (
+    snapshot: MediaLibrarySnapshot,
+    continuity: MediaLibraryContinuityInput,
+    sources: [MediaLibrarySourceSummary]
+) {
+    let fixture = mediaLibraryFixture()
+    let continuingItem = fixture.snapshot.items[0]
+    let watchedItem = fixture.snapshot.items[1]
+    let offlineSourceID = UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!
+    let continuingMediaID = mediaIDForFixture(continuingItem)
+    let watchedMediaID = mediaIDForFixture(watchedItem)
+    let unavailableMediaID = String(repeating: "c", count: 64)
+    let history = [
+        try PlaybackHistoryEntry(
+            mediaID: continuingMediaID,
+            sourceID: continuingItem.sourceID,
+            sourceDisplayName: continuingItem.sourceName,
+            fileName: continuingItem.media.name,
+            path: continuingItem.media.path,
+            size: continuingItem.media.size ?? 0,
+            modifiedAt: continuingItem.media.modifiedAt,
+            lastPlayedAt: Date(timeIntervalSince1970: 1_800_000_300)
+        ),
+        try PlaybackHistoryEntry(
+            mediaID: watchedMediaID,
+            sourceID: watchedItem.sourceID,
+            sourceDisplayName: watchedItem.sourceName,
+            fileName: watchedItem.media.name,
+            path: watchedItem.media.path,
+            size: watchedItem.media.size ?? 0,
+            modifiedAt: watchedItem.media.modifiedAt,
+            lastPlayedAt: Date(timeIntervalSince1970: 1_800_000_200)
+        ),
+        try PlaybackHistoryEntry(
+            mediaID: unavailableMediaID,
+            sourceID: offlineSourceID,
+            sourceDisplayName: "Offline Archive",
+            fileName: "Unavailable Cut.mkv",
+            path: "/Archive/Unavailable Cut.mkv",
+            size: 3_000_000_000,
+            modifiedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            lastPlayedAt: Date(timeIntervalSince1970: 1_800_000_100)
+        ),
+    ]
+    let progress = [
+        try PlaybackProgress(
+            mediaID: continuingMediaID,
+            sourceID: continuingItem.sourceID,
+            position: 42,
+            duration: 100
+        ),
+        try PlaybackProgress(
+            mediaID: watchedMediaID,
+            sourceID: watchedItem.sourceID,
+            position: 96,
+            duration: 100
+        ),
+    ]
+    let connectedSourceIDs = Set(fixture.sources.map(\.id))
+
+    return (
+        fixture.snapshot,
+        MediaLibraryContinuityInput(
+            history: history,
+            progress: progress,
+            configuredSourceIDs: connectedSourceIDs.union([offlineSourceID]),
+            connectedSourceIDs: connectedSourceIDs
+        ),
+        fixture.sources + [
+            MediaLibrarySourceSummary(id: offlineSourceID, displayName: "Offline Archive"),
+        ]
+    )
+}
+
+private func mediaIDForFixture(_ item: MediaLibraryItem) -> String {
+    MediaSyncIdentity.make(from: MediaFileIdentity(
+        sourceID: item.sourceID,
+        path: item.media.path,
+        size: item.media.size ?? 0,
+        modifiedAt: item.media.modifiedAt
+    ))
+}
+
+private func continuityInput(marker: Character) throws -> MediaLibraryContinuityInput {
+    let sourceID = UUID()
+    return MediaLibraryContinuityInput(
+        history: [],
+        progress: [
+            try PlaybackProgress(
+                mediaID: String(repeating: marker, count: 64),
+                sourceID: sourceID,
+                position: 42,
+                duration: 100
+            ),
+        ],
+        configuredSourceIDs: [sourceID],
+        connectedSourceIDs: [sourceID]
+    )
+}
+
+private actor ContinuityLoadGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    var hasWaiter: Bool { continuation != nil }
+
+    func wait(for input: MediaLibraryContinuityInput) async -> MediaLibraryContinuityInput {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        return input
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor MediaLibraryListProbe {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var count = 0
+
+    var hasWaiter: Bool { continuation != nil }
+
+    func list() async -> [MediaSourceItem] {
+        count += 1
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        return []
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
+private func eventuallyRendering(
+    attempts: Int = 200,
+    condition: @escaping @MainActor () async -> Bool
+) async -> Bool {
+    for _ in 0..<attempts {
+        if await condition() { return true }
+        await Task.yield()
+    }
+    return false
 }
 
 private func sourceManagementDetailsFixture() -> SMBSourceDetails {
