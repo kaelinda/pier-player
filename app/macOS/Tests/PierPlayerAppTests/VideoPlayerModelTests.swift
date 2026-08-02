@@ -560,6 +560,12 @@ private actor ModelProgressManager: PlaybackProgressManaging {
     func replaceAll(_ progress: [PlaybackProgress]) {
         storedProgress = progress.first
     }
+
+    func removeAll(sourceID: UUID) {
+        if storedProgress?.sourceID == sourceID {
+            storedProgress = nil
+        }
+    }
 }
 
 @MainActor

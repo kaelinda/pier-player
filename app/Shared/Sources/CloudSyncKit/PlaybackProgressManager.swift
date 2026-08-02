@@ -11,14 +11,20 @@ public protocol PlaybackProgressManaging: Sendable {
     ) async
     func allProgress() async -> [PlaybackProgress]
     func replaceAll(_ progress: [PlaybackProgress]) async
+    func removeAll(sourceID: UUID) async
 }
 
 public actor PlaybackProgressManager: PlaybackProgressManaging {
+    private struct LastSave: Sendable {
+        let sourceID: UUID
+        let savedAt: Date
+    }
+
     private let store: PlaybackProgressStore
     private let syncCoordinator: (any CloudSyncCoordinating)?
     private let minimumSaveInterval: TimeInterval
     private let now: @Sendable () -> Date
-    private var lastSavedAt: [String: Date] = [:]
+    private var lastSavedAt: [String: LastSave] = [:]
 
     public init(
         store: PlaybackProgressStore,
@@ -46,19 +52,25 @@ public actor PlaybackProgressManager: PlaybackProgressManaging {
         let timestamp = now()
         if !force,
            let lastSaved = lastSavedAt[mediaID],
-           timestamp.timeIntervalSince(lastSaved) < minimumSaveInterval {
+           lastSaved.sourceID == sourceID,
+           timestamp.timeIntervalSince(lastSaved.savedAt) < minimumSaveInterval {
             return
+        }
+        var completionOverride: Bool?
+        if position < 5 {
+            completionOverride = (try? await store.progress(mediaID: mediaID))?.isCompleted
         }
         guard let progress = try? PlaybackProgress(
             mediaID: mediaID,
             sourceID: sourceID,
             position: position,
             duration: duration,
-            modifiedAt: timestamp
+            modifiedAt: timestamp,
+            isCompleted: completionOverride
         ) else { return }
         do {
             try await store.upsert(progress)
-            lastSavedAt[mediaID] = timestamp
+            lastSavedAt[mediaID] = LastSave(sourceID: sourceID, savedAt: timestamp)
             await syncCoordinator?.enqueue(.upsertProgress(progress))
         } catch {
             return
@@ -71,5 +83,14 @@ public actor PlaybackProgressManager: PlaybackProgressManaging {
 
     public func replaceAll(_ progress: [PlaybackProgress]) async {
         try? await store.replaceAll(progress)
+    }
+
+    public func removeAll(sourceID: UUID) async {
+        do {
+            try await store.removeAll(sourceID: sourceID)
+            lastSavedAt = lastSavedAt.filter { $0.value.sourceID != sourceID }
+        } catch {
+            return
+        }
     }
 }
