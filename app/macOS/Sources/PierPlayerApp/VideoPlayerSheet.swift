@@ -77,8 +77,14 @@ struct VideoPlayerSheet: View {
             guard let activePlayback, let sourceID else { return }
             activePlaybackToken = activePlayback.register(
                 sourceID: sourceID,
-                stop: { await playerModel.stop() },
-                forcePersist: { await playerModel.forcePersistProgress() }
+                stop: { [weak playerModel] in
+                    guard let playerModel else { return }
+                    await playerModel.stop()
+                },
+                forcePersist: { [weak playerModel] in
+                    guard let playerModel else { return }
+                    await playerModel.forcePersistProgress()
+                }
             )
         }
         .onDisappear {
