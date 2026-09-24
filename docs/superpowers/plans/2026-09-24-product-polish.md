@@ -138,7 +138,10 @@ git commit -m "feat(macOS): clarify source removal and scan limits"
 Move `RecentMediaCard`, `PosterMediaCard`, `MediaSourceCard`,
 `MediaCardButtonStyle`, and `MediaArtwork` from `MediaLibraryView.swift` into
 `MediaLibraryComponents.swift`. Keep their private implementation details and
-public behavior unchanged. Import only the frameworks they need.
+public behavior unchanged. Because Swift `private` is file-scoped, the three
+card views and `MediaArtwork` must be internal (no access modifier) so
+`MediaLibraryView.swift` can compose them; their stored implementation details
+and helper properties can remain private. Import only the frameworks they need.
 
 - [ ] **Step 2: Introduce shared media-library design constants**
 
@@ -153,6 +156,11 @@ magic values.
 Change the artwork extension badge from `caption2` to `caption` while retaining
 its compact badge frame and contrast. Preserve the existing accessibility-hidden
 artwork behavior and reduced-motion handling.
+
+Expose a small internal presentation helper for the scan-limit notice (for
+example, `MediaLibraryLimitNoticeCopy`) so its visibility rule and copy can be
+asserted without rendering SwiftUI internals. The helper must return no notice
+when a search query is active.
 
 - [ ] **Step 4: Run UI-focused tests**
 
