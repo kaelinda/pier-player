@@ -48,7 +48,7 @@ struct VideoPlayerSheet: View {
         }
         .frame(minWidth: 760, idealWidth: 960, minHeight: 520, idealHeight: 640)
         .background(Color.black)
-        .tint(.teal)
+        .tint(.accentColor)
         .environment(\.colorScheme, .dark)
         .task {
             await playerModel.start()
@@ -61,7 +61,7 @@ struct VideoPlayerSheet: View {
     private var playerHeader: some View {
         HStack(spacing: 11) {
             Image(systemName: "film.fill")
-                .foregroundStyle(.teal)
+                .foregroundStyle(Color.accentColor)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 2) {

@@ -13,9 +13,13 @@ enum PlaybackControlCopy {
         let remainingSeconds = seconds % 60
 
         if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+            return "\(hours):\(twoDigit(minutes)):\(twoDigit(remainingSeconds))"
         }
-        return String(format: "%d:%02d", minutes, remainingSeconds)
+        return "\(minutes):\(twoDigit(remainingSeconds))"
+    }
+
+    private static func twoDigit(_ value: Int) -> String {
+        value < 10 ? "0\(value)" : "\(value)"
     }
 }
 
@@ -50,7 +54,7 @@ struct PlaybackControlsView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
-                        .background(Color.teal.opacity(0.9), in: Circle())
+                        .background(Color.accentColor.opacity(0.9), in: Circle())
                 }
                 .buttonStyle(PlayerChromeButtonStyle())
                 .help(model.snapshot.intendsToPlay ? "Pause" : "Play")

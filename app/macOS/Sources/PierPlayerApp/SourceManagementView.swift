@@ -386,14 +386,10 @@ struct SourceSheetHeader: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.teal.opacity(0.14))
-                Image(systemName: systemImage)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.teal)
-            }
-            .frame(width: 42, height: 42)
+            Image(systemName: systemImage)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)

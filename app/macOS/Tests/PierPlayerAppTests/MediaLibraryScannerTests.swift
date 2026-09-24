@@ -41,6 +41,7 @@ struct MediaLibraryScannerTests {
         #expect(result.items.allSatisfy { $0.sourceID == sourceID })
         #expect(result.items.allSatisfy { $0.sourceName == "Living Room NAS" })
         #expect(result.failure == nil)
+        #expect(!result.didReachMaximumVideoCount)
     }
 
     @Test func scanUsesBreadthFirstTraversalAndDoesNotListPastDepthThree() async throws {
@@ -118,6 +119,69 @@ struct MediaLibraryScannerTests {
         #expect(result.items.count == 200)
         #expect(result.items.last?.media.path == "/video-199.mp4")
         #expect(await reads.snapshot() == ["/"])
+        #expect(result.didReachMaximumVideoCount)
+    }
+
+    @Test func scanAtExactMaximumDoesNotReportTruncation() async throws {
+        let source = MediaLibrarySource(id: UUID(), displayName: "NAS") { path in
+            #expect(path == "/")
+            return [
+                mediaItem(name: "first.mp4", path: "/first.mp4"),
+                mediaItem(name: "second.mp4", path: "/second.mp4"),
+            ]
+        }
+
+        let result = try await MediaLibraryScanner(
+            limits: MediaLibraryScanLimits(maximumDepth: 3, maximumVideoCount: 2)
+        ).scan(source: source)
+
+        #expect(result.items.count == 2)
+        #expect(!result.didReachMaximumVideoCount)
+    }
+
+    @Test func scanReportsAdditionalVideoInTheSameDirectory() async throws {
+        let reads = DirectoryReadRecorder()
+        let source = MediaLibrarySource(id: UUID(), displayName: "NAS") { path in
+            await reads.record(path)
+            return (0..<3).map { index in
+                mediaItem(name: "video-\(index).mp4", path: "/video-\(index).mp4")
+            }
+        }
+
+        let result = try await MediaLibraryScanner(
+            limits: MediaLibraryScanLimits(maximumDepth: 3, maximumVideoCount: 2)
+        ).scan(source: source)
+
+        #expect(result.items.map(\.media.path) == ["/video-0.mp4", "/video-1.mp4"])
+        #expect(result.didReachMaximumVideoCount)
+        #expect(await reads.snapshot() == ["/"])
+    }
+
+    @Test func scanReportsAdditionalVideoInALaterDirectory() async throws {
+        let reads = DirectoryReadRecorder()
+        let source = MediaLibrarySource(id: UUID(), displayName: "NAS") { path in
+            await reads.record(path)
+            switch path {
+            case "/":
+                return [
+                    mediaItem(name: "first.mp4", path: "/first.mp4"),
+                    mediaItem(name: "second.mp4", path: "/second.mp4"),
+                    directoryItem(name: "later", path: "/later"),
+                ]
+            case "/later":
+                return [mediaItem(name: "third.mp4", path: "/later/third.mp4")]
+            default:
+                return []
+            }
+        }
+
+        let result = try await MediaLibraryScanner(
+            limits: MediaLibraryScanLimits(maximumDepth: 3, maximumVideoCount: 2)
+        ).scan(source: source)
+
+        #expect(result.items.count == 2)
+        #expect(result.didReachMaximumVideoCount)
+        #expect(await reads.snapshot() == ["/", "/later"])
     }
 
     @Test func scanRetainsVideosAndSanitizesNestedDirectoryFailure() async throws {

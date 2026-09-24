@@ -43,18 +43,32 @@ struct MediaLibraryScanFailure: Identifiable, Equatable, Sendable {
 struct MediaLibraryScanResult: Equatable, Sendable {
     let items: [MediaLibraryItem]
     let failure: MediaLibraryScanFailure?
+    let didReachMaximumVideoCount: Bool
+
+    init(
+        items: [MediaLibraryItem],
+        failure: MediaLibraryScanFailure?,
+        didReachMaximumVideoCount: Bool = false
+    ) {
+        self.items = items
+        self.failure = failure
+        self.didReachMaximumVideoCount = didReachMaximumVideoCount
+    }
 }
 
 struct MediaLibrarySnapshot: Equatable, Sendable {
     var items: [MediaLibraryItem]
     var failures: [MediaLibraryScanFailure]
+    var didReachMaximumVideoCount: Bool
 
     init(
         items: [MediaLibraryItem] = [],
-        failures: [MediaLibraryScanFailure] = []
+        failures: [MediaLibraryScanFailure] = [],
+        didReachMaximumVideoCount: Bool = false
     ) {
         self.items = items
         self.failures = failures
+        self.didReachMaximumVideoCount = didReachMaximumVideoCount
     }
 }
 
@@ -112,15 +126,20 @@ struct MediaLibraryScanner: Sendable {
                             ))
                     }
                 } else if entry.isSupportedVideo {
+                    if items.count >= limits.maximumVideoCount {
+                        return MediaLibraryScanResult(
+                            items: items,
+                            failure: nil,
+                            didReachMaximumVideoCount: true
+                        )
+                    }
+
                     items.append(
                         MediaLibraryItem(
                             sourceID: source.id,
                             sourceName: source.displayName,
                             media: entry
                         ))
-                    if items.count == limits.maximumVideoCount {
-                        return MediaLibraryScanResult(items: items, failure: nil)
-                    }
                 }
             }
         }
@@ -152,6 +171,7 @@ final class MediaLibraryViewModel: ObservableObject {
         let connectedSourceIDs = Set(sources.map(\.id))
         snapshot.items.removeAll { !connectedSourceIDs.contains($0.sourceID) }
         snapshot.failures.removeAll { !connectedSourceIDs.contains($0.sourceID) }
+        snapshot.didReachMaximumVideoCount = false
         isLoading = true
 
         defer {
@@ -219,6 +239,9 @@ final class MediaLibraryViewModel: ObservableObject {
                     if let failure = result.failure {
                         snapshot.failures.append(failure)
                     }
+                    snapshot.didReachMaximumVideoCount =
+                        snapshot.didReachMaximumVideoCount
+                        || result.didReachMaximumVideoCount
                 }
 
                 if nextSourceIndex < sources.count {

@@ -15,6 +15,30 @@ enum MediaLibraryContentCopy {
         "No supported videos were found within the scanned folders."
 }
 
+struct MediaLibraryLimitNoticeCopy: Equatable {
+    let title: String
+    let message: String
+
+    static func make(
+        didReachMaximumVideoCount: Bool,
+        query: String,
+        limits: MediaLibraryScanLimits = MediaLibraryScanLimits()
+    ) -> MediaLibraryLimitNoticeCopy? {
+        guard didReachMaximumVideoCount,
+              query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+
+        return MediaLibraryLimitNoticeCopy(
+            title: "Library Scan Limit Reached",
+            message:
+                "Showing up to \(limits.maximumVideoCount) videos within "
+                + "\(limits.maximumDepth) folder levels. Browse a source to find more."
+        )
+    }
+}
+
 struct MediaLibrarySummary: Equatable {
     let primaryText: String
     let secondaryText: String
@@ -204,6 +228,7 @@ struct MediaLibraryContentView: View {
     let isRestoring: Bool
     let isScanning: Bool
     let query: String
+    let scanLimits: MediaLibraryScanLimits = MediaLibraryScanLimits()
     let play: (MediaLibraryItem) -> Void
     let openSource: (UUID) -> Void
     let addSource: () -> Void
@@ -252,6 +277,14 @@ struct MediaLibraryContentView: View {
         )
     }
 
+    private var limitNoticeCopy: MediaLibraryLimitNoticeCopy? {
+        MediaLibraryLimitNoticeCopy.make(
+            didReachMaximumVideoCount: snapshot.didReachMaximumVideoCount,
+            query: query,
+            limits: scanLimits
+        )
+    }
+
     var body: some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 30) {
@@ -261,12 +294,16 @@ struct MediaLibraryContentView: View {
                     failureNotice
                 }
 
+                if let limitNoticeCopy {
+                    limitNotice(copy: limitNoticeCopy)
+                }
+
                 content
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 24)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(.background)
     }
 
     private var libraryStatus: some View {
@@ -313,6 +350,26 @@ struct MediaLibraryContentView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.yellow.opacity(0.18))
         }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func limitNotice(copy: MediaLibraryLimitNoticeCopy) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(copy.title)
+                    .font(.callout.weight(.medium))
+                Text(copy.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 
@@ -455,326 +512,4 @@ private struct MediaLibraryReloadRequest: Hashable {
     let sourceIDs: [UUID]
     let sourceRevision: Int
     let generation: Int
-}
-
-private struct MediaLibrarySection<Content: View>: View {
-    let title: String
-    let count: Int
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title)
-                    .font(.headline)
-                Text("\(count)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-            }
-            content
-        }
-    }
-}
-
-private struct RecentMediaCard: View {
-    let item: MediaLibraryItem
-    let action: () -> Void
-
-    @State private var isHovering = false
-    @FocusState private var isFocused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 8) {
-                MediaArtwork(item: item)
-                    .frame(width: 248, height: 140)
-                    .shadow(
-                        color: .teal.opacity(isHovering ? 0.18 : 0),
-                        radius: isHovering ? 10 : 4,
-                        y: isHovering ? 5 : 2
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(
-                                borderColor,
-                                lineWidth: isFocused ? 2 : 1
-                            )
-                    }
-                    .overlay {
-                        if isHovering {
-                            playOverlay
-                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                        }
-                    }
-
-                mediaLabels
-            }
-            .frame(width: 248, alignment: .leading)
-        }
-        .buttonStyle(MediaCardButtonStyle())
-        .focused($isFocused)
-        .onHover { isHovering = $0 }
-        .offset(y: isHovering ? -2 : 0)
-        .scaleEffect(isHovering ? 1.012 : 1)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Opens the video player")
-    }
-
-    private var mediaLabels: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(MediaLibraryPresentation.displayTitle(for: item))
-                .font(.subheadline.weight(.medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Text(item.sourceName)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-    }
-
-    private var borderColor: Color {
-        isFocused ? .accentColor : .white.opacity(isHovering ? 0.34 : 0.12)
-    }
-
-    private var playOverlay: some View {
-        Image(systemName: "play.fill")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 38, height: 38)
-            .background(.black.opacity(0.62), in: Circle())
-            .accessibilityHidden(true)
-    }
-
-    private var accessibilityLabel: String {
-        "\(MediaLibraryPresentation.displayTitle(for: item)), \(item.sourceName)"
-    }
-}
-
-private struct PosterMediaCard: View {
-    let item: MediaLibraryItem
-    let action: () -> Void
-
-    @State private var isHovering = false
-    @FocusState private var isFocused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 8) {
-                MediaArtwork(item: item)
-                    .aspectRatio(2 / 3, contentMode: .fit)
-                    .shadow(
-                        color: .teal.opacity(isHovering ? 0.18 : 0),
-                        radius: isHovering ? 10 : 4,
-                        y: isHovering ? 5 : 2
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(
-                                borderColor,
-                                lineWidth: isFocused ? 2 : 1
-                            )
-                    }
-                    .overlay {
-                        if isHovering {
-                            playOverlay
-                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                        }
-                    }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(MediaLibraryPresentation.displayTitle(for: item))
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(item.sourceName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(MediaCardButtonStyle())
-        .focused($isFocused)
-        .onHover { isHovering = $0 }
-        .offset(y: isHovering ? -2 : 0)
-        .scaleEffect(isHovering ? 1.012 : 1)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Opens the video player")
-    }
-
-    private var borderColor: Color {
-        isFocused ? .accentColor : .white.opacity(isHovering ? 0.34 : 0.12)
-    }
-
-    private var playOverlay: some View {
-        Image(systemName: "play.fill")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 36, height: 36)
-            .background(.black.opacity(0.62), in: Circle())
-            .accessibilityHidden(true)
-    }
-
-    private var accessibilityLabel: String {
-        "\(MediaLibraryPresentation.displayTitle(for: item)), \(item.sourceName)"
-    }
-}
-
-private struct MediaSourceCard: View {
-    let source: MediaLibrarySourceSummary
-    let action: () -> Void
-
-    @State private var isHovering = false
-    @FocusState private var isFocused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.teal.opacity(0.16))
-                    Image(systemName: "externaldrive.connected.to.line.below")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.teal)
-                }
-                .frame(width: 42, height: 42)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(source.displayName)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text("Browse Files")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 4)
-
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 12)
-            .frame(width: 220, height: 78)
-            .background(
-                isHovering
-                    ? Color.accentColor.opacity(0.08)
-                    : Color(nsColor: .controlBackgroundColor)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(
-                        borderColor,
-                        lineWidth: isFocused ? 2 : 1
-                    )
-            }
-        }
-        .buttonStyle(MediaCardButtonStyle())
-        .focused($isFocused)
-        .onHover { isHovering = $0 }
-        .offset(y: isHovering ? -1 : 0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(source.displayName)
-        .accessibilityHint("Opens the file browser")
-    }
-
-    private var borderColor: Color {
-        isFocused ? .accentColor : .white.opacity(isHovering ? 0.28 : 0.1)
-    }
-}
-
-private struct MediaCardButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(
-                reduceMotion ? nil : .easeOut(duration: 0.1),
-                value: configuration.isPressed
-            )
-    }
-}
-
-private struct MediaArtwork: View {
-    let item: MediaLibraryItem
-
-    private let symbols = [
-        "film.fill",
-        "play.rectangle.fill",
-        "video.fill",
-        "movieclapper.fill",
-        "rectangle.stack.fill",
-        "tv.fill",
-    ]
-
-    private let palettes: [(base: Color, accent: Color)] = [
-        (Color(red: 0.08, green: 0.25, blue: 0.29), Color(red: 0.18, green: 0.66, blue: 0.63)),
-        (Color(red: 0.25, green: 0.15, blue: 0.27), Color(red: 0.85, green: 0.42, blue: 0.55)),
-        (Color(red: 0.15, green: 0.21, blue: 0.29), Color(red: 0.90, green: 0.72, blue: 0.36)),
-        (Color(red: 0.26, green: 0.20, blue: 0.16), Color(red: 0.83, green: 0.48, blue: 0.29)),
-        (Color(red: 0.12, green: 0.25, blue: 0.22), Color(red: 0.47, green: 0.71, blue: 0.43)),
-        (Color(red: 0.25, green: 0.18, blue: 0.21), Color(red: 0.79, green: 0.46, blue: 0.39)),
-        (Color(red: 0.18, green: 0.19, blue: 0.28), Color(red: 0.50, green: 0.65, blue: 0.85)),
-        (Color(red: 0.24, green: 0.23, blue: 0.14), Color(red: 0.76, green: 0.70, blue: 0.36)),
-    ]
-
-    var body: some View {
-        GeometryReader { proxy in
-            let style = MediaLibraryPresentation.posterStyle(for: item)
-            let palette = palettes[style.paletteIndex % palettes.count]
-
-            ZStack {
-                palette.base
-
-                Rectangle()
-                    .fill(palette.accent.opacity(0.72))
-                    .frame(width: proxy.size.width * 1.45, height: proxy.size.height * 0.42)
-                    .rotationEffect(.degrees(-16))
-                    .offset(y: proxy.size.height * 0.23)
-
-                Image(systemName: symbols[style.symbolIndex % symbols.count])
-                    .font(.system(size: min(proxy.size.width, proxy.size.height) * 0.25, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.94))
-                    .shadow(color: palette.base.opacity(0.42), radius: 3, y: 1)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(alignment: .bottomTrailing) {
-                extensionBadge
-                    .padding(8)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-
-    private var extensionBadge: some View {
-        Text(fileExtension)
-            .font(.caption2.weight(.bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .frame(height: 20)
-            .background(.black.opacity(0.58))
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-    }
-
-    private var fileExtension: String {
-        let value = (item.media.name as NSString).pathExtension.uppercased()
-        return value.isEmpty ? "VIDEO" : value
-    }
 }

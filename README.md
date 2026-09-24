@@ -3,8 +3,8 @@
 Pier Player is a macOS-first SwiftUI prototype for browsing and progressively
 playing video files stored on an SMB share. It connects directly to a NAS with
 `libsmb2`, builds a lightweight media view from the remote directory tree, and
-feeds supported files to AVFoundation through byte-range requests instead of
-downloading the entire file first.
+feeds supported files into an FFmpeg-backed playback pipeline through bounded
+byte-range reads instead of downloading the entire file first.
 
 > Pier Player is under active development and is not ready for production use.
 
@@ -18,19 +18,21 @@ The current `main` branch provides:
 - Persisted sources, automatic reconnection, hierarchical file browsing, and
   source removal.
 - A media library view with bounded scanning, search, recently added videos,
-  and direct access to each connected source.
-- Progressive playback of `.mp4`, `.m4v`, and `.mov` files through
-  `AVAssetResourceLoader` and `AVPlayer`.
+  scan-limit feedback, and direct access to each connected source.
+- Progressive FFmpeg playback for common containers including MP4/MOV/M4V, MKV,
+  WebM, AVI, MPEG-TS, FLV, MPEG/MPG/VOB, OGV, 3GP, ASF, and WMV.
+- VideoToolbox decode when available, with software fallback.
+- Audio-track selection plus embedded and external text subtitle handling.
 - Shared source, cache, playback-state, and telemetry foundations for later
   Apple-platform clients.
 - Privacy-bounded local diagnostics for resource access and playback behavior,
   with an in-app Settings view and explicit support-bundle export.
 - An opt-in `SMBProbe` command for NAS connectivity and throughput checks.
 
-The current player does **not** yet support MKV, AVI, MPEG-TS, WebM, subtitles,
-track selection, or the planned FFmpeg/VideoToolbox playback pipeline. Codec
-support inside the accepted containers is determined by AVFoundation. The iOS
-and tvOS clients are placeholders and are not included in the package.
+The current player still has important limits: HDR/Dolby Vision correctness,
+bitmap subtitle rendering, metadata scraping, large-scale incremental indexing,
+and production iOS/tvOS clients are not implemented yet. The iOS and tvOS
+directories are placeholders and are not included in the package.
 
 ## Requirements
 
@@ -46,7 +48,7 @@ Clone the repository with its pinned `libsmb2` submodule:
 ```bash
 git clone --recurse-submodules git@github.com:kaelinda/pier-player.git
 cd pier-player/app
-swift run PierPlayerApp
+script/build_and_run.sh
 ```
 
 For an existing clone, initialize the native dependency before building:
@@ -54,7 +56,7 @@ For an existing clone, initialize the native dependency before building:
 ```bash
 git submodule update --init --recursive
 cd app
-swift run PierPlayerApp
+script/build_and_run.sh
 ```
 
 When the app opens:
@@ -70,17 +72,17 @@ host and `Media` as the share, not `smb://nas.local/Media` in either field.
 
 ## Security Notice
 
-Do not use production credentials with the current prototype. Although the app
-writes credentials to the macOS Keychain, the persisted source record currently
-also includes the username and password in plaintext at:
+Do not use production credentials with the current prototype. New source records
+store non-secret connection configuration in:
 
 ```text
 ~/Library/Application Support/PierPlayer/sources.json
 ```
 
-That duplicate plaintext storage must be removed before the application is
-considered safe for general use or distribution. Logs and bug reports must also
-redact SMB hosts, paths, usernames, and passwords.
+SMB credentials are stored separately in the macOS Keychain. On launch, the app
+migrates legacy source files that included credentials into Keychain-backed
+storage and rewrites the source file without secrets. Logs and bug reports must
+still redact SMB hosts, paths, usernames, and passwords.
 
 ## iCloud Sync Setup
 
@@ -164,6 +166,7 @@ All build commands run from `app/`.
 | `app/Shared/Sources/PlaybackCore/` | Playback state and session transitions |
 | `app/Shared/Sources/PlaybackTelemetry/` | Playback metric snapshots and reports |
 | `app/macOS/` | Implemented SwiftUI application and macOS tests |
+| `app/macOS/Resources/` | macOS app icon source PNG and generated `.icns` bundle resource |
 | `app/iOS/`, `app/tvOS/` | Reserved platform-client directories; not implemented yet |
 | `app/Tools/SMBProbe/` | Opt-in SMB connectivity and throughput diagnostic |
 | `app/Tools/DiagnosticsReport/` | Offline validation and reporting for exported `.pierdiag` packages |
@@ -182,6 +185,7 @@ From `app/`:
 swift build                 # Build libraries and the macOS executable
 swift test                  # Run all Swift Testing suites
 swift run PierPlayerApp     # Launch the macOS app
+script/build_and_run.sh     # Build and launch a signed local .app bundle with its icon
 swift run SMBProbe --help   # Show diagnostic options
 swift run DiagnosticsReport --help # Show support-bundle options
 scripts/check.sh            # Test, Release-build, and check whitespace

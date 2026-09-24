@@ -52,6 +52,52 @@ struct MediaLibraryViewModelTests {
         #expect(!viewModel.isLoading)
     }
 
+    @Test func reloadAggregatesScanLimitAcrossSourcesAndClearsItOnNextReload() async throws {
+        let truncatedSource = MediaLibrarySource(
+            id: UUID(),
+            displayName: "Large NAS"
+        ) { path in
+            #expect(path == "/")
+            return [
+                videoItem(path: "/one.mp4"),
+                videoItem(path: "/two.mp4"),
+                videoItem(path: "/three.mp4"),
+            ]
+        }
+        let failedSource = MediaLibrarySource(
+            id: UUID(),
+            displayName: "Unavailable NAS"
+        ) { _ in
+            throw SensitiveTestError(secret: "private")
+        }
+        let scanner = MediaLibraryScanner(
+            limits: MediaLibraryScanLimits(maximumDepth: 3, maximumVideoCount: 2)
+        )
+        let viewModel = MediaLibraryViewModel(scanner: scanner)
+
+        await viewModel.reload(sources: [truncatedSource, failedSource])
+
+        #expect(viewModel.snapshot.didReachMaximumVideoCount)
+        #expect(viewModel.snapshot.items.count == 2)
+        #expect(viewModel.snapshot.failures.map(\.sourceID) == [failedSource.id])
+
+        let exactSource = MediaLibrarySource(
+            id: truncatedSource.id,
+            displayName: "Large NAS"
+        ) { path in
+            #expect(path == "/")
+            return [
+                videoItem(path: "/one.mp4"),
+                videoItem(path: "/two.mp4"),
+            ]
+        }
+
+        await viewModel.reload(sources: [exactSource])
+
+        #expect(!viewModel.snapshot.didReachMaximumVideoCount)
+        #expect(viewModel.snapshot.failures.isEmpty)
+    }
+
     @Test func reloadKeepsExistingSnapshotUntilFirstSourceResult() async throws {
         let gate = SuspensionGate()
         let completion = TaskCompletionProbe()

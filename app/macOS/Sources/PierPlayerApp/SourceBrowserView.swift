@@ -56,14 +56,10 @@ struct SourceBrowserView: View {
 
     private var browserHeader: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.teal.opacity(0.12))
-                Image(systemName: path == "/" ? "externaldrive.fill" : "folder.fill")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.teal)
-            }
-            .frame(width: 34, height: 34)
+            Image(systemName: path == "/" ? "externaldrive.fill" : "folder.fill")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.configuredSource(id: sourceID)?.displayName ?? "Network Source")
@@ -87,7 +83,7 @@ struct SourceBrowserView: View {
         }
         .padding(.horizontal, 18)
         .frame(height: 58)
-        .background(.background)
+        .background(.bar)
     }
 
     @ViewBuilder
@@ -188,21 +184,17 @@ private struct MediaItemRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(iconColor.opacity(0.12))
-                Image(systemName: iconName)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(iconColor)
-            }
-            .frame(width: 32, height: 32)
+            Image(systemName: iconName)
+                .font(.body)
+                .foregroundStyle(iconColor)
+                .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(kindLabel)
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -235,8 +227,8 @@ private struct MediaItemRow: View {
     }
 
     private var iconColor: Color {
-        if item.kind == .directory { return .teal }
-        if item.isSupportedVideo { return .teal }
+        if item.kind == .directory { return .accentColor }
+        if item.isSupportedVideo { return .accentColor }
         return .secondary
     }
 

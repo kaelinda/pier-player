@@ -20,6 +20,7 @@ struct RootView: View {
     @State private var isAddingSource = false
     @State private var selectedDestination: SidebarDestination? = .library
     @State private var sourceManagementSheet: SourceManagementSheet?
+    @State private var sourcePendingRemoval: AppModel.ConfiguredSource?
 
     var body: some View {
         NavigationSplitView {
@@ -39,6 +40,31 @@ struct RootView: View {
             case let .edit(details):
                 EditSMBSourceView(model: model, details: details)
             }
+        }
+        .confirmationDialog(
+            "Remove \(sourcePendingRemoval?.displayName ?? "Source")?",
+            isPresented: Binding(
+                get: { sourcePendingRemoval != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        sourcePendingRemoval = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let source = sourcePendingRemoval {
+                Button("Remove \(source.displayName)", role: .destructive) {
+                    removeSourceConfirmed(source.id)
+                    sourcePendingRemoval = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "This removes the local connection configuration. "
+                + "Files on the NAS are not deleted."
+            )
         }
         .onChange(of: model.configuredSources.map(\.id), initial: true) { _, sourceIDs in
             selectedDestination = destination.reconciled(with: sourceIDs)
@@ -96,6 +122,10 @@ struct RootView: View {
     }
 
     private func removeSource(_ id: UUID) {
+        sourcePendingRemoval = model.configuredSource(id: id)
+    }
+
+    private func removeSourceConfirmed(_ id: UUID) {
         Task {
             await model.removeSource(id: id)
         }
@@ -221,7 +251,7 @@ struct RootSidebarContent: View {
         HStack(spacing: 9) {
             Image(systemName: sources.isEmpty ? "externaldrive" : "externaldrive.connected.to.line.below")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(sources.isEmpty ? Color.secondary : Color.teal)
+                .foregroundStyle(.secondary)
                 .frame(width: 16)
 
             Text(sourceCountLabel)
@@ -263,34 +293,35 @@ private struct SourceSidebarRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.teal.opacity(0.14))
-                Image(systemName: source.connectionState == .connected
-                    ? "externaldrive.connected.to.line.below"
-                    : "externaldrive.badge.person.crop")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.teal)
-            }
-            .frame(width: 30, height: 30)
+            Image(systemName: source.connectionState == .connected
+                ? "externaldrive.connected.to.line.below"
+                : "externaldrive.badge.person.crop")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(source.displayName)
-                    .font(.body.weight(.medium))
+                    .font(.body)
                     .lineLimit(1)
                 Text("\(source.configuration.host)/\(source.configuration.share)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if source.connectionState == .needsCredential {
-                    Text("Credentials Required")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
+            }
+
+            Spacer(minLength: 4)
+
+            if source.connectionState == .needsCredential {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help("Credentials Required")
+                    .accessibilityLabel("Credentials Required")
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
     }
 }
