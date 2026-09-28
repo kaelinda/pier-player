@@ -22,12 +22,15 @@
 - Modify: `app/Shared/Tests/CloudSyncKitTests/PlaybackProgressManagerTests.swift`
 - Modify: `app/Shared/Tests/CloudSyncKitTests/PlaybackProgressStoreTests.swift`
 - Modify: `app/Shared/Tests/CloudSyncKitTests/SyncCoordinatorTests.swift`
+- Modify: `app/Shared/Tests/CloudSyncKitTests/CloudKitMappingTests.swift`
+- Modify: `app/macOS/Tests/PierPlayerAppTests/VideoPlayerModelTests.swift`
 
 - [ ] Write failing tests for removing one progress record, clearing all records, emitting a deletion mutation, and a delete-vs-upsert two-device merge.
 - [ ] Run the focused CloudSyncKit tests and confirm they fail because the APIs/mutation are missing.
 - [ ] Add `isDeleted` with backward-compatible Codable decoding, `remove(mediaID:)` and `removeAll()` to `PlaybackProgressManaging`, and a store-level `remove(mediaID:)` helper.
 - [ ] Persist soft tombstones atomically and enqueue `.deleteProgress(PlaybackProgress)` mutations; clear throttling state after removal.
 - [ ] Update CloudKit mapping and synchronization merge logic so tombstones win against older upserts and deleted records do not reappear after a sync.
+- [ ] Ensure `AppModel` can load local tombstones/progress even when CloudKit is unavailable; CloudKit synchronization remains an optional merge step.
 - [ ] Run the focused tests and then the full CloudSyncKit suite.
 - [ ] Commit as `feat(sync): support deleting playback history`.
 
@@ -42,8 +45,9 @@
 - [ ] Write failing tests for resolved continue items, completed recent items, modified-date/media-ID ordering, duplicate progress IDs, missing-media records, and configured-source fallback.
 - [ ] Run the focused presentation tests and confirm they fail.
 - [ ] Add a `PlaybackHistorySnapshot` value type containing progress records and a refresh task in `AppModel`.
-- [ ] Add pure helpers that resolve records by `MediaSyncIdentity`, keep missing records separate, exclude tombstones and non-resumable records from Continue Watching, and cap each row at eight.
+- [ ] Add pure helpers that resolve records by `MediaSyncIdentity`, handling nil media size with a stable fallback identity policy, keep missing records separate, exclude tombstones and non-resumable records from Continue Watching, and cap each row at eight.
 - [ ] Add generic unavailable-card metadata using configured source names without persisting or displaying the opaque hash/path.
+- [ ] Define duplicate progress winner selection as newest `modifiedAt`, then deterministic `mediaID` ordering.
 - [ ] Add human-readable remaining-time/percentage formatting helpers with stable edge-case behavior.
 - [ ] Run focused tests and commit as `feat(library): derive playback history sections`.
 
@@ -62,6 +66,7 @@
 - [ ] Write failing rendering/state tests for section ordering, empty history, no-scanned-items-with-history, and action routing; add a player test proving `.fromBeginning` does not seek.
 - [ ] Run the focused UI tests and confirm the expected failures.
 - [ ] Load progress after source restoration and after each library scan; use configured sources as fallback for disconnected-source history and keep the snapshot independent from transient scan results.
+- [ ] Refresh the history snapshot after player dismissal/completion as well as after scans, including empty and failed scans.
 - [ ] Add play actions for resume and replay, single-record removal, clear-all confirmation, and a refresh action that updates the visible snapshot; pass `.fromBeginning` for replay.
 - [ ] Render Continue Watching before Recently Added; render Recently Played only when it has resolved records; preserve existing search behavior.
 - [ ] Add unavailable-record affordances and an empty-state action that returns to All Videos.
