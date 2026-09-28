@@ -22,7 +22,7 @@ Show only records with `isDeleted == false`, `isCompleted == false`, `effectiveR
 
 ### Recently Played
 
-Show the latest eight resolved progress records, including completed records and short/incomplete records that are not eligible for resume, sorted by `modifiedAt` descending with `mediaID` as a tie-breaker. Completed cards use **Replay** as their primary action; unfinished records use **Continue**. A record appears in only one row: Continue Watching contains only resumable records, while Recently Played contains every other active record.
+Show the latest eight active progress records, including completed records, short/incomplete records that are not eligible for resume, and records whose media is currently unavailable. Sort by `modifiedAt` descending with `mediaID` as a tie-breaker. Resolved completed cards use **Replay** as their primary action; resolved unfinished records use **Continue**; unavailable cards are remove-only. A record appears in only one row: Continue Watching contains only resolved resumable records, while Recently Played contains every other active record.
 
 ### Record Management
 
@@ -34,7 +34,7 @@ Expose a toolbar/menu action to clear all playback history. Require a destructiv
 - Add an `isDeleted` soft-tombstone field to `PlaybackProgress`, preserving backward-compatible decoding of existing JSON.
 - Add a `.deleteProgress(PlaybackProgress)` CloudSync mutation. Tombstones participate in modified-date merge resolution and are filtered from active UI results; CloudKit keeps the tombstone record so another device cannot resurrect an older progress record.
 - Add an AppModel snapshot of playback progress and an async refresh/remove API for the library.
-- Add pure presentation helpers that join progress records to `MediaLibraryItem` values and return continue/recent collections.
+- Add pure presentation helpers that join progress records to `MediaLibraryItem` values and return continue/recent collections; Recently Played must include active records without a matching item.
 - Add a player resume policy (`automatic` or `fromBeginning`) so replay never seeks to an old saved position.
 - Keep all progress operations actor-isolated and make UI-facing snapshots `Sendable`, `Equatable`, and deterministic.
 
@@ -44,4 +44,4 @@ Use native SwiftUI materials, SF Symbols, one system accent color, and compact h
 
 ## States and Verification
 
-Cover empty, loading, unavailable, completed, partially watched, source-disconnected, no-scanned-items-with-history, and clear-all confirmation states. Add CloudSyncKit unit tests for tombstone persistence, delete-vs-upsert merge resolution, offline retry, and mutation generation; presentation tests for deterministic joining/sorting/deduplication; player tests for replay-from-beginning; and SwiftUI rendering tests for section visibility. Run focused tests, `swift test`, `swift build -c release`, and `scripts/check.sh`. Launch the app and verify resume, replay, remove-one, clear-all, app relaunch persistence, and offline/missing-file behavior manually.
+Cover empty, loading, unavailable, completed, partially watched, source-disconnected, no-scanned-items-with-history, and clear-all confirmation states. Add CloudSyncKit unit tests for tombstone persistence, active lookup filtering, delete-vs-upsert merge resolution, offline retry, and mutation generation; presentation tests for deterministic joining/sorting/deduplication; player tests for replay-from-beginning; and SwiftUI rendering tests for section visibility. Run focused tests, `swift test`, `swift build -c release`, and `scripts/check.sh`. Launch the app and verify resume, replay, remove-one, clear-all, app relaunch persistence, and offline/missing-file behavior manually.

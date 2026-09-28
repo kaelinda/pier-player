@@ -29,6 +29,7 @@
 - [ ] Run the focused CloudSyncKit tests and confirm they fail because the APIs/mutation are missing.
 - [ ] Add `isDeleted` with backward-compatible Codable decoding, `remove(mediaID:)` and `removeAll()` to `PlaybackProgressManaging`, and a store-level `remove(mediaID:)` helper.
 - [ ] Persist soft tombstones atomically and enqueue `.deleteProgress(PlaybackProgress)` mutations; clear throttling state after removal.
+- [ ] Make `effectiveResumePosition` return zero for tombstones and make active `progress(mediaID:)` lookups return `nil` for tombstones.
 - [ ] Update CloudKit mapping and synchronization merge logic so tombstones win against older upserts and deleted records do not reappear after a sync.
 - [ ] Ensure `AppModel` can load local tombstones/progress even when CloudKit is unavailable; CloudKit synchronization remains an optional merge step.
 - [ ] Run the focused tests and then the full CloudSyncKit suite.
@@ -42,7 +43,7 @@
 - Create: `app/macOS/Sources/PierPlayerApp/PlaybackHistoryPresentation.swift`
 - Create: `app/macOS/Tests/PierPlayerAppTests/PlaybackHistoryPresentationTests.swift`
 
-- [ ] Write failing tests for resolved continue items, completed recent items, modified-date/media-ID ordering, duplicate progress IDs, missing-media records, and configured-source fallback.
+- [ ] Write failing tests for resolved continue items, completed recent items, modified-date/media-ID ordering, duplicate progress IDs, missing-media records included in Recently Played, and configured-source fallback.
 - [ ] Run the focused presentation tests and confirm they fail.
 - [ ] Add a `PlaybackHistorySnapshot` value type containing progress records and a refresh task in `AppModel`.
 - [ ] Add pure helpers that resolve records by `MediaSyncIdentity`, handling nil media size with a stable fallback identity policy, keep missing records separate, exclude tombstones and non-resumable records from Continue Watching, and cap each row at eight.
@@ -68,7 +69,7 @@
 - [ ] Load progress after source restoration and after each library scan; use configured sources as fallback for disconnected-source history and keep the snapshot independent from transient scan results.
 - [ ] Refresh the history snapshot after player dismissal/completion as well as after scans, including empty and failed scans.
 - [ ] Add play actions for resume and replay, single-record removal, clear-all confirmation, and a refresh action that updates the visible snapshot; pass `.fromBeginning` for replay.
-- [ ] Render Continue Watching before Recently Added; render Recently Played only when it has resolved records; preserve existing search behavior.
+- [ ] Render Continue Watching before Recently Added; render Recently Played whenever it has any active history item, including unavailable records; preserve existing search behavior.
 - [ ] Add unavailable-record affordances and an empty-state action that returns to All Videos.
 - [ ] Add accessible labels/hints, keyboard focus, context menus, Reduce Motion handling, and a toolbar/menu command for clearing history.
 - [ ] Run focused UI tests and commit as `feat(macOS): add playback history home sections`.
