@@ -19,7 +19,47 @@ ICON_SOURCE="$ROOT_DIR/macOS/Resources/PierPlayer.icns"
 
 cd "$ROOT_DIR"
 
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+stop_running_app() {
+  if ! pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+    return
+  fi
+
+  # Prefer AppKit's normal termination path so applicationShouldTerminate can
+  # flush diagnostics and release playback/network resources.
+  /usr/bin/osascript \
+    -e "tell application \"$APP_NAME\" to quit" \
+    >/dev/null 2>&1 || true
+
+  for _ in $(seq 1 200); do
+    if ! pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.05
+  done
+
+  echo "warning: $APP_NAME did not quit cleanly; requesting termination" >&2
+  pkill -TERM -x "$APP_NAME" >/dev/null 2>&1 || true
+  for _ in $(seq 1 200); do
+    if ! pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.05
+  done
+
+  echo "warning: $APP_NAME did not terminate cleanly; forcing termination" >&2
+  pkill -KILL -x "$APP_NAME" >/dev/null 2>&1 || true
+  for _ in $(seq 1 40); do
+    if ! pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.05
+  done
+
+  echo "error: unable to stop $APP_NAME" >&2
+  exit 1
+}
+
+stop_running_app
 
 swift build
 BUILD_BINARY="$(swift build --show-bin-path)/$APP_NAME"

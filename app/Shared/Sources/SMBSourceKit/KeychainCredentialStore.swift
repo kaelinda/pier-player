@@ -99,13 +99,21 @@ public actor KeychainCredentialStore: SMBCredentialStore {
     private func performLoad(sourceID: UUID) throws -> StoredSMBCredential? {
         try validateService()
         do {
-            return try performLoad(
+            if let credential = try performLoad(
                 sourceID: sourceID,
                 synchronizable: synchronizesCredentials
-            )
+            ) {
+                return credential
+            }
         } catch KeychainCredentialStoreError.unexpectedStatus(errSecMissingEntitlement) {
-            return try performLoad(sourceID: sourceID, synchronizable: false)
+            // Fall through to the local keychain query below. Unsigned
+            // development builds commonly cannot query iCloud Keychain.
         }
+
+        guard synchronizesCredentials else { return nil }
+        // Saving falls back to a non-synchronizable item when the app has no
+        // iCloud Keychain entitlement. Read that item on the next launch too.
+        return try performLoad(sourceID: sourceID, synchronizable: false)
     }
 
     private func performLoad(

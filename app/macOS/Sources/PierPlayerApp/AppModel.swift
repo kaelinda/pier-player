@@ -51,6 +51,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var configuredSources: [ConfiguredSource] = []
     @Published private(set) var isRestoring = true
     @Published private(set) var sourceRevision = 0
+    @Published private(set) var playbackProgress: [PlaybackProgress] = []
+    @Published private(set) var isLoadingPlaybackHistory = false
 
     let playbackSession: PlaybackSession
     private let credentialStore: any SMBCredentialStore
@@ -114,6 +116,7 @@ final class AppModel: ObservableObject {
         }
 
         await restore(storedSources, operation: operation)
+        await refreshPlaybackProgress()
         operation.end(outcome: .success)
     }
 
@@ -189,6 +192,7 @@ final class AppModel: ObservableObject {
     }
 
     func synchronizeSources() async {
+        await refreshPlaybackProgress()
         guard let syncCoordinator,
               let stored = try? await sourceStore.load() else { return }
         let localProgress = await progressManager?.allProgress() ?? []
@@ -199,6 +203,7 @@ final class AppModel: ObservableObject {
         let merged = await syncCoordinator.synchronize(local: local)
         let mergedStorage = merged.sources.map(\.storageSource)
         await progressManager?.replaceAll(merged.progress)
+        playbackProgress = merged.progress
         guard mergedStorage != stored else { return }
 
         try? await sourceStore.replaceAll(mergedStorage)
@@ -214,6 +219,27 @@ final class AppModel: ObservableObject {
         await restore(mergedStorage, operation: operation)
         operation.end(outcome: .success)
         sourceRevision &+= 1
+    }
+
+    func refreshPlaybackProgress() async {
+        guard let progressManager else {
+            playbackProgress = []
+            isLoadingPlaybackHistory = false
+            return
+        }
+        isLoadingPlaybackHistory = true
+        playbackProgress = await progressManager.allProgress()
+        isLoadingPlaybackHistory = false
+    }
+
+    func removePlaybackHistory(mediaID: String) async {
+        await progressManager?.remove(mediaID: mediaID)
+        await refreshPlaybackProgress()
+    }
+
+    func clearPlaybackHistory() async {
+        await progressManager?.removeAll()
+        await refreshPlaybackProgress()
     }
 
     var phaseLabel: String {
@@ -511,6 +537,13 @@ final class AppModel: ObservableObject {
                 displayName: connected.displayName
             )
         }
+    }
+
+    var mediaLibrarySourceNames: [UUID: String] {
+        Dictionary(
+            configuredSources.map { ($0.id, $0.displayName) },
+            uniquingKeysWith: { current, _ in current }
+        )
     }
 
     func smbURL(for sourceID: UUID, path: String) -> URL? {

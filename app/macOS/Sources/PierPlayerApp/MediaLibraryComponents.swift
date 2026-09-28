@@ -1,12 +1,15 @@
 import SwiftUI
 
 enum MediaLibraryDesign {
-    static let cardCornerRadius: CGFloat = 8
+    static let cardCornerRadius: CGFloat = 12
     static let recentCardWidth: CGFloat = 248
     static let recentArtworkHeight: CGFloat = 140
+    static let historyCardWidth: CGFloat = 268
+    static let historyArtworkHeight: CGFloat = 150
     static let sourceCardWidth: CGFloat = 220
     static let sourceCardHeight: CGFloat = 78
-    static let hoverAnimationDuration = 0.16
+    static let hoverAnimation = Animation.spring(response: 0.28, dampingFraction: 0.82)
+    static let pressAnimation = Animation.spring(response: 0.18, dampingFraction: 0.86)
 }
 
 struct MediaLibrarySection<Content: View>: View {
@@ -15,14 +18,21 @@ struct MediaLibrarySection<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
                 Text(title)
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                 Text("\(count)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(.quaternary, in: Capsule())
                     .monospacedDigit()
+                Spacer(minLength: 12)
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(height: 1)
             }
             content
         }
@@ -46,9 +56,9 @@ struct RecentMediaCard: View {
                         height: MediaLibraryDesign.recentArtworkHeight
                     )
                     .shadow(
-                        color: .black.opacity(isHovering ? 0.16 : 0),
-                        radius: isHovering ? 10 : 4,
-                        y: isHovering ? 5 : 2
+                        color: .black.opacity(isHovering ? 0.12 : 0),
+                        radius: isHovering ? 12 : 4,
+                        y: isHovering ? 6 : 2
                     )
                     .overlay {
                         RoundedRectangle(
@@ -79,7 +89,7 @@ struct RecentMediaCard: View {
         .animation(
             reduceMotion
                 ? nil
-                : .easeOut(duration: MediaLibraryDesign.hoverAnimationDuration),
+                : MediaLibraryDesign.hoverAnimation,
             value: isHovering
         )
         .accessibilityElement(children: .ignore)
@@ -110,9 +120,13 @@ struct RecentMediaCard: View {
     private var playOverlay: some View {
         Image(systemName: "play.fill")
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .frame(width: 38, height: 38)
-            .background(.black.opacity(0.62), in: Circle())
+            .background(.regularMaterial, in: Circle())
+            .overlay {
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.26))
+            }
             .accessibilityHidden(true)
     }
 
@@ -135,9 +149,9 @@ struct PosterMediaCard: View {
                 MediaArtwork(item: item)
                     .aspectRatio(2 / 3, contentMode: .fit)
                     .shadow(
-                        color: .black.opacity(isHovering ? 0.16 : 0),
-                        radius: isHovering ? 10 : 4,
-                        y: isHovering ? 5 : 2
+                        color: .black.opacity(isHovering ? 0.12 : 0),
+                        radius: isHovering ? 12 : 4,
+                        y: isHovering ? 6 : 2
                     )
                     .overlay {
                         RoundedRectangle(
@@ -178,7 +192,7 @@ struct PosterMediaCard: View {
         .animation(
             reduceMotion
                 ? nil
-                : .easeOut(duration: MediaLibraryDesign.hoverAnimationDuration),
+                : MediaLibraryDesign.hoverAnimation,
             value: isHovering
         )
         .accessibilityElement(children: .ignore)
@@ -195,9 +209,13 @@ struct PosterMediaCard: View {
     private var playOverlay: some View {
         Image(systemName: "play.fill")
             .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .frame(width: 36, height: 36)
-            .background(.black.opacity(0.62), in: Circle())
+            .background(.regularMaterial, in: Circle())
+            .overlay {
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.26))
+            }
             .accessibilityHidden(true)
     }
 
@@ -251,7 +269,7 @@ struct MediaSourceCard: View {
                 height: MediaLibraryDesign.sourceCardHeight
             )
             .background(
-                .thinMaterial,
+                .regularMaterial,
                 in: RoundedRectangle(
                     cornerRadius: MediaLibraryDesign.cardCornerRadius,
                     style: .continuous
@@ -281,7 +299,7 @@ struct MediaSourceCard: View {
         .animation(
             reduceMotion
                 ? nil
-                : .easeOut(duration: MediaLibraryDesign.hoverAnimationDuration),
+                : MediaLibraryDesign.hoverAnimation,
             value: isHovering
         )
         .accessibilityElement(children: .ignore)
@@ -296,14 +314,14 @@ struct MediaSourceCard: View {
     }
 }
 
-private struct MediaCardButtonStyle: ButtonStyle {
+struct MediaCardButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(
-                reduceMotion ? nil : .easeOut(duration: 0.1),
+                reduceMotion ? nil : MediaLibraryDesign.pressAnimation,
                 value: configuration.isPressed
             )
     }

@@ -85,6 +85,7 @@ enum CloudKitRecordMapper {
         record["position"] = NSNumber(value: progress.position)
         record["duration"] = NSNumber(value: progress.duration)
         record["completed"] = NSNumber(value: progress.isCompleted)
+        record["deleted"] = NSNumber(value: progress.isDeleted)
         record["clientModifiedAt"] = progress.modifiedAt as CKRecordValue
         return record
     }
@@ -105,7 +106,8 @@ enum CloudKitRecordMapper {
                 position: position,
                 duration: duration,
                 modifiedAt: modifiedAt,
-                isCompleted: (record["completed"] as? NSNumber)?.boolValue ?? false
+                isCompleted: (record["completed"] as? NSNumber)?.boolValue ?? false,
+                isDeleted: (record["deleted"] as? NSNumber)?.boolValue ?? false
             )
         } catch {
             throw CloudSyncError.invalidRemoteRecord
@@ -159,6 +161,7 @@ public actor CloudKitSyncTransport: CloudSyncTransport {
             case let .deleteSource(id, modifiedAt):
                 CloudKitRecordMapper.deletionRecord(id: id, modifiedAt: modifiedAt)
             case let .upsertProgress(progress): CloudKitRecordMapper.record(for: progress)
+            case let .deleteProgress(progress): CloudKitRecordMapper.record(for: progress)
             }
         }
         do {

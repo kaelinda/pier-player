@@ -23,12 +23,14 @@ public enum CloudSyncMutation: Codable, Equatable, Sendable {
     case upsertSource(SyncedSMBSource)
     case deleteSource(id: UUID, modifiedAt: Date)
     case upsertProgress(PlaybackProgress)
+    case deleteProgress(PlaybackProgress)
 
     var key: String {
         switch self {
         case let .upsertSource(source): "source:\(source.id.uuidString)"
         case let .deleteSource(id, _): "source:\(id.uuidString)"
         case let .upsertProgress(progress): "progress:\(progress.mediaID)"
+        case let .deleteProgress(progress): "progress:\(progress.mediaID)"
         }
     }
 
@@ -36,13 +38,27 @@ public enum CloudSyncMutation: Codable, Equatable, Sendable {
         switch self {
         case let .upsertSource(source): source.id
         case let .deleteSource(id, _): id
-        case .upsertProgress: nil
+        case let .upsertProgress(progress), let .deleteProgress(progress):
+            progress.sourceID
         }
     }
 
     var mediaID: String? {
-        guard case let .upsertProgress(progress) = self else { return nil }
-        return progress.mediaID
+        switch self {
+        case let .upsertProgress(progress), let .deleteProgress(progress):
+            return progress.mediaID
+        default:
+            return nil
+        }
+    }
+
+    var progressValue: PlaybackProgress? {
+        switch self {
+        case let .upsertProgress(progress), let .deleteProgress(progress):
+            return progress
+        default:
+            return nil
+        }
     }
 }
 

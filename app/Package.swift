@@ -219,6 +219,7 @@ let package = Package(
         .testTarget(
             name: "PierPlayerAppTests",
             dependencies: [
+                "CloudSyncKit",
                 "DiagnosticsKit",
                 "PierPlayerApp",
                 "FFmpegKit",

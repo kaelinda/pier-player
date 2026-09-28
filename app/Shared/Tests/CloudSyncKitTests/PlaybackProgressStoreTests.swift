@@ -28,6 +28,20 @@ import Testing
     #expect(try await fixture.store.load().isEmpty)
 }
 
+@Test func progressStoreCanRemoveOneRecordWithoutTouchingOthers() async throws {
+    let fixture = try ProgressStoreFixture()
+    defer { fixture.cleanup() }
+    let first = try progress(id: "c", sourceID: UUID(), position: 20)
+    let second = try progress(id: "d", sourceID: UUID(), position: 30)
+
+    try await fixture.store.upsert(first)
+    try await fixture.store.upsert(second)
+    try await fixture.store.remove(mediaID: first.mediaID)
+
+    #expect(try await fixture.store.progress(mediaID: first.mediaID) == nil)
+    #expect(try await fixture.store.progress(mediaID: second.mediaID) == second)
+}
+
 private struct ProgressStoreFixture {
     let directory: URL
     let fileURL: URL

@@ -1,4 +1,5 @@
 import AppKit
+import CloudSyncKit
 import DiagnosticsKit
 import MediaSourceKit
 import PlaybackCore
@@ -101,6 +102,49 @@ import Testing
         isScanning: true
     )
     #expect(scanningEmpty.mode == .scanning)
+}
+
+@Test func mediaLibraryKeepsHistoryVisibleWhenARescanHasNoItems() {
+    let state = MediaLibraryContentState.resolve(
+        sourceCount: 0,
+        itemCount: 0,
+        filteredItemCount: 0,
+        hasQuery: false,
+        isRestoring: false,
+        isScanning: false,
+        hasRecentlyPlayed: true
+    )
+
+    #expect(
+        state.mode == .content([
+            .recentlyPlayed,
+            .noVideos,
+            .fileSources,
+        ])
+    )
+}
+
+@Test func mediaLibraryPlacesHistoryBeforeDiscoverySections() {
+    let state = MediaLibraryContentState.resolve(
+        sourceCount: 1,
+        itemCount: 4,
+        filteredItemCount: 4,
+        hasQuery: false,
+        isRestoring: false,
+        isScanning: false,
+        hasContinueWatching: true,
+        hasRecentlyPlayed: true
+    )
+
+    #expect(
+        state.mode == .content([
+            .continueWatching,
+            .recentlyPlayed,
+            .recentlyAdded,
+            .allVideos,
+            .fileSources,
+        ])
+    )
 }
 
 @Test func mediaLibrarySearchCompositionUsesOnlyOneResultsShelf() {
@@ -343,6 +387,46 @@ func populatedMediaLibraryRenders(
     #expect(image.tiffRepresentation?.isEmpty == false)
     #expect(darkPixelFraction(in: image) < 0.6)
     try writeSnapshotIfRequested(image, name: "media-library-light")
+}
+
+@MainActor
+@Test func mediaLibraryRendersContinueWatchingAndRecentlyPlayed() throws {
+    let fixture = mediaLibraryFixture()
+    let continueItem = fixture.snapshot.items[0]
+    let completedItem = fixture.snapshot.items[1]
+    let progress = [
+        try playbackProgress(for: continueItem, position: 38, duration: 100, modifiedAt: 20),
+        try playbackProgress(for: completedItem, position: 100, duration: 100, modifiedAt: 30),
+    ]
+    let size = CGSize(width: 1_120, height: 820)
+    let image = try renderInWindow(
+        MediaLibraryContentView(
+            snapshot: fixture.snapshot,
+            sourceSummaries: fixture.sources,
+            playbackProgress: progress,
+            sourceNames: Dictionary(
+                fixture.sources.map { ($0.id, $0.displayName) },
+                uniquingKeysWith: { current, _ in current }
+            ),
+            isRestoring: false,
+            isScanning: false,
+            query: "",
+            play: { _ in },
+            playFromBeginning: { _ in },
+            removePlaybackHistory: { _ in },
+            openSource: { _ in },
+            addSource: {}
+        )
+        .preferredColorScheme(.dark)
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size,
+        appearance: NSAppearance(named: .darkAqua)
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    try writeSnapshotIfRequested(image, name: "media-library-playback-history")
 }
 
 @MainActor
@@ -638,6 +722,27 @@ private func sourceManagementDetailsFixture() -> SMBSourceDetails {
         username: "viewer",
         domain: "WORKGROUP",
         requiresEncryption: true
+    )
+}
+
+private func playbackProgress(
+    for item: MediaLibraryItem,
+    position: TimeInterval,
+    duration: TimeInterval,
+    modifiedAt: TimeInterval
+) throws -> PlaybackProgress {
+    let identity = MediaFileIdentity(
+        sourceID: item.sourceID,
+        path: item.media.path,
+        size: item.media.size ?? 0,
+        modifiedAt: item.media.modifiedAt
+    )
+    return try PlaybackProgress(
+        mediaID: MediaSyncIdentity.make(from: identity),
+        sourceID: item.sourceID,
+        position: position,
+        duration: duration,
+        modifiedAt: Date(timeIntervalSince1970: modifiedAt)
     )
 }
 

@@ -9,6 +9,8 @@ public protocol PlaybackProgressManaging: Sendable {
         duration: TimeInterval,
         force: Bool
     ) async
+    func remove(mediaID: String) async
+    func removeAll() async
     func allProgress() async -> [PlaybackProgress]
     func replaceAll(_ progress: [PlaybackProgress]) async
 }
@@ -62,6 +64,41 @@ public actor PlaybackProgressManager: PlaybackProgressManaging {
             await syncCoordinator?.enqueue(.upsertProgress(progress))
         } catch {
             return
+        }
+    }
+
+    public func remove(mediaID: String) async {
+        guard let existing = try? await store.record(mediaID: mediaID),
+              !existing.isDeleted else {
+            return
+        }
+
+        let timestamp = now()
+        guard let tombstone = try? PlaybackProgress(
+            mediaID: existing.mediaID,
+            sourceID: existing.sourceID,
+            position: 0,
+            duration: max(existing.duration, 1),
+            modifiedAt: timestamp,
+            isCompleted: true,
+            isDeleted: true
+        ) else {
+            return
+        }
+
+        do {
+            try await store.upsert(tombstone)
+            lastSavedAt[mediaID] = nil
+            await syncCoordinator?.enqueue(.deleteProgress(tombstone))
+        } catch {
+            return
+        }
+    }
+
+    public func removeAll() async {
+        let values = await allProgress()
+        for value in values where !value.isDeleted {
+            await remove(mediaID: value.mediaID)
         }
     }
 

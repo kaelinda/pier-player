@@ -37,6 +37,25 @@ import Testing
     #expect(resumable.effectiveResumePosition == 42)
 }
 
+@Test func deletedProgressIsNotResumableAndRoundTripsItsTombstoneFlag() throws {
+    let tombstone = try PlaybackProgress(
+        mediaID: String(repeating: "e", count: 64),
+        sourceID: UUID(),
+        position: 0,
+        duration: 1,
+        modifiedAt: Date(timeIntervalSince1970: 4),
+        isCompleted: true,
+        isDeleted: true
+    )
+
+    #expect(tombstone.isDeleted)
+    #expect(tombstone.effectiveResumePosition == 0)
+
+    let encoded = try JSONEncoder().encode(tombstone)
+    let decoded = try JSONDecoder().decode(PlaybackProgress.self, from: encoded)
+    #expect(decoded == tombstone)
+}
+
 @Test func progressRejectsInvalidNumbersAndIdentity() {
     #expect(throws: PlaybackProgressError.invalidMediaID) {
         try PlaybackProgress(

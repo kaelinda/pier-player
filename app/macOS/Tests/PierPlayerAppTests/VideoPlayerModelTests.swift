@@ -109,6 +109,34 @@ import Testing
 }
 
 @MainActor
+@Test func modelCanStartFromBeginningWithoutRestoringSavedProgress() async throws {
+    let file = ModelTestFile(size: 1_024)
+    let source = ModelTestSource(file: file)
+    let coordinator = ModelTestCoordinator()
+    let progress = ModelProgressManager()
+    let mediaID = MediaSyncIdentity.make(from: file.identity)
+    await progress.set(try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: source.id,
+        position: 30,
+        duration: 100
+    ))
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: source,
+        renderer: SampleBufferRenderer(),
+        coordinator: coordinator,
+        progressManager: progress,
+        startMode: .fromBeginning
+    )
+
+    await model.start()
+
+    #expect(coordinator.seekPositions.isEmpty)
+    await model.stop()
+}
+
+@MainActor
 @Test func modelForceFlushesWhenPlaybackEnds() async throws {
     let source = ModelTestSource(file: ModelTestFile(size: 1_024))
     let coordinator = ModelTestCoordinator()
@@ -534,7 +562,12 @@ private actor ModelProgressManager: PlaybackProgressManaging {
     }
 
     func progress(mediaID: String) -> PlaybackProgress? {
-        storedProgress?.mediaID == mediaID ? storedProgress : nil
+        guard let storedProgress,
+              storedProgress.mediaID == mediaID,
+              !storedProgress.isDeleted else {
+            return nil
+        }
+        return storedProgress
     }
 
     func record(
@@ -551,6 +584,15 @@ private actor ModelProgressManager: PlaybackProgressManaging {
             position: position,
             duration: duration
         )
+    }
+
+    func remove(mediaID: String) {
+        guard storedProgress?.mediaID == mediaID else { return }
+        storedProgress = nil
+    }
+
+    func removeAll() {
+        storedProgress = nil
     }
 
     func allProgress() -> [PlaybackProgress] {

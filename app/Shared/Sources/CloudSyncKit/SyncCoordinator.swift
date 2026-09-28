@@ -28,6 +28,21 @@ public actor SyncCoordinator: CloudSyncCoordinating {
         do {
             let remote = try await transport.fetchSnapshot()
             var pending = try await stateStore.pendingMutations()
+            let staleProgressMutations = pending.filter { mutation in
+                guard let value = mutation.progressValue,
+                      let remoteValue = remote.progress.first(where: {
+                          $0.mediaID == value.mediaID
+                      }) else {
+                    return false
+                }
+                return !shouldReplace(value, current: remoteValue)
+            }
+            if !staleProgressMutations.isEmpty {
+                try? await stateStore.remove(staleProgressMutations)
+                pending.removeAll { mutation in
+                    staleProgressMutations.contains(mutation)
+                }
+            }
             var merged = merge(local: local, remote: remote, pending: pending)
 
             let pendingKeys = Set(pending.map(\.key))
@@ -41,7 +56,9 @@ public actor SyncCoordinator: CloudSyncCoordinating {
             for progress in local.progress where
                 !pendingKeys.contains("progress:\(progress.mediaID)")
                     && remote.progress.first(where: { $0.mediaID == progress.mediaID }) == nil {
-                let mutation = CloudSyncMutation.upsertProgress(progress)
+                let mutation: CloudSyncMutation = progress.isDeleted
+                    ? .deleteProgress(progress)
+                    : .upsertProgress(progress)
                 try await stateStore.enqueue(mutation)
                 pending.append(mutation)
             }
@@ -80,7 +97,7 @@ public actor SyncCoordinator: CloudSyncCoordinating {
         var progress = Dictionary(uniqueKeysWithValues: remote.progress.map { ($0.mediaID, $0) })
         for value in local.progress {
             guard pendingMediaIDs.contains(value.mediaID)
-                    || value.modifiedAt > progress[value.mediaID]?.modifiedAt ?? .distantPast else {
+                    || shouldReplace(value, current: progress[value.mediaID]) else {
                 continue
             }
             progress[value.mediaID] = value
@@ -110,7 +127,13 @@ public actor SyncCoordinator: CloudSyncCoordinating {
                 sources[id] = nil
                 progress = progress.filter { $0.value.sourceID != id }
             case let .upsertProgress(value):
-                progress[value.mediaID] = value
+                if shouldReplace(value, current: progress[value.mediaID]) {
+                    progress[value.mediaID] = value
+                }
+            case let .deleteProgress(value):
+                if shouldReplace(value, current: progress[value.mediaID]) {
+                    progress[value.mediaID] = value
+                }
             }
         }
         return CloudSyncSnapshot(
@@ -119,5 +142,22 @@ public actor SyncCoordinator: CloudSyncCoordinating {
                 .sorted { $0.id.uuidString < $1.id.uuidString },
             progress: progress.values.sorted { $0.mediaID < $1.mediaID }
         )
+    }
+
+    private func shouldReplace(
+        _ value: PlaybackProgress,
+        current: PlaybackProgress?
+    ) -> Bool {
+        guard let current else { return true }
+        if value.modifiedAt != current.modifiedAt {
+            return value.modifiedAt > current.modifiedAt
+        }
+        if value.isDeleted != current.isDeleted {
+            return value.isDeleted
+        }
+        if value.position != current.position {
+            return value.position > current.position
+        }
+        return value.duration >= current.duration
     }
 }

@@ -204,6 +204,9 @@ struct PierPlayerApp: App {
                 }
         }
         .defaultSize(width: 1120, height: 720)
+        .commands {
+            PierPlayerCommands()
+        }
 
         Settings {
             DiagnosticsSettingsView(

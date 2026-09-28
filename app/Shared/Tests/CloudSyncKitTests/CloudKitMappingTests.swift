@@ -52,9 +52,26 @@ import Testing
     #expect(record.recordType == "PlaybackProgress")
     #expect(keys == Set([
         "schemaVersion", "sourceID", "position", "duration",
-        "completed", "clientModifiedAt",
+        "completed", "deleted", "clientModifiedAt",
     ]))
     #expect(!keys.contains("path"))
+    #expect(try CloudKitRecordMapper.progress(from: record) == progress)
+}
+
+@Test func deletedProgressRecordRoundTripsAsATombstone() throws {
+    let progress = try PlaybackProgress(
+        mediaID: String(repeating: "d", count: 64),
+        sourceID: UUID(),
+        position: 0,
+        duration: 1,
+        modifiedAt: Date(timeIntervalSince1970: 30),
+        isCompleted: true,
+        isDeleted: true
+    )
+
+    let record = CloudKitRecordMapper.record(for: progress)
+
+    #expect((record["deleted"] as? NSNumber)?.boolValue == true)
     #expect(try CloudKitRecordMapper.progress(from: record) == progress)
 }
 

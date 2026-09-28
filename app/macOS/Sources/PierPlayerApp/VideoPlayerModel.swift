@@ -26,6 +26,11 @@ protocol PlaybackCoordinatorControlling: Sendable {
 
 extension PlaybackCoordinator: PlaybackCoordinatorControlling {}
 
+enum PlaybackStartMode: Sendable {
+    case automatic
+    case fromBeginning
+}
+
 @MainActor
 final class VideoPlayerModel: ObservableObject {
     let item: MediaSourceItem
@@ -44,6 +49,7 @@ final class VideoPlayerModel: ObservableObject {
     private let diagnosticContext: DiagnosticContext
     private let identityProvider: (any DiagnosticIdentityProviding)?
     private let progressManager: (any PlaybackProgressManaging)?
+    private let startMode: PlaybackStartMode
     private var snapshotTask: Task<Void, Never>?
     private var progressTask: Task<Void, Never>?
     private var hasStarted = false
@@ -58,7 +64,8 @@ final class VideoPlayerModel: ObservableObject {
         diagnosticRecorder: any DiagnosticRecording = NoopDiagnosticRecorder(),
         diagnosticContext: DiagnosticContext? = nil,
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
-        progressManager: (any PlaybackProgressManaging)? = nil
+        progressManager: (any PlaybackProgressManaging)? = nil,
+        startMode: PlaybackStartMode = .automatic
     ) {
         let renderer = renderer ?? SampleBufferRenderer()
         let diagnosticContext = diagnosticContext ?? DiagnosticContext(
@@ -73,6 +80,7 @@ final class VideoPlayerModel: ObservableObject {
         self.diagnosticContext = diagnosticContext
         self.identityProvider = identityProvider
         self.progressManager = progressManager
+        self.startMode = startMode
         self.coordinator = coordinator ?? PlaybackCoordinator(
             renderer: renderer,
             diagnosticRecorder: diagnosticRecorder,
@@ -319,6 +327,7 @@ final class VideoPlayerModel: ObservableObject {
     }
 
     private func restoreProgressIfAvailable() async {
+        guard startMode == .automatic else { return }
         guard let activeMediaID,
               let progressManager,
               let progress = await progressManager.progress(mediaID: activeMediaID),

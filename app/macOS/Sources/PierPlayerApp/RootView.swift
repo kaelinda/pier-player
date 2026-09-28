@@ -30,6 +30,7 @@ struct RootView: View {
         } detail: {
             detailContent
         }
+        .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $isAddingSource) {
             AddSMBSourceView(model: model)
         }
@@ -69,6 +70,7 @@ struct RootView: View {
         .onChange(of: model.configuredSources.map(\.id), initial: true) { _, sourceIDs in
             selectedDestination = destination.reconciled(with: sourceIDs)
         }
+        .focusedValue(\.addSMBSourceAction, showAddSource)
     }
 
     private var sourceSidebar: some View {
@@ -119,6 +121,10 @@ struct RootView: View {
             get: { destination },
             set: { selectedDestination = $0 }
         )
+    }
+
+    private func showAddSource() {
+        isAddingSource = true
     }
 
     private func removeSource(_ id: UUID) {
@@ -229,7 +235,7 @@ struct RootSidebarContent: View {
         HStack(spacing: 10) {
             ProgressView()
                 .controlSize(.small)
-            Text("Restoring Sources")
+            Text("Restoring file sources")
                 .foregroundStyle(.secondary)
         }
         .frame(minHeight: 32)
@@ -241,7 +247,7 @@ struct RootSidebarContent: View {
             Image(systemName: "externaldrive.badge.questionmark")
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
-            Text("No Sources")
+            Text("No file sources yet")
                 .foregroundStyle(.secondary)
         }
         .frame(minHeight: 32)
@@ -269,14 +275,10 @@ struct RootSidebarContent: View {
             .buttonStyle(.plain)
             .help("Add SMB Source")
             .accessibilityLabel("Add SMB Source")
-            .keyboardShortcut("n", modifiers: .command)
         }
         .padding(.horizontal, 12)
-        .frame(height: 42)
-        .background(.bar)
-        .overlay(alignment: .top) {
-            Divider()
-        }
+        .padding(.top, 6)
+        .frame(height: 48)
     }
 
     private var sourceCountLabel: String {
@@ -302,7 +304,7 @@ private struct SourceSidebarRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(source.displayName)
-                    .font(.body)
+                    .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                 Text("\(source.configuration.host)/\(source.configuration.share)")
                     .font(.caption)

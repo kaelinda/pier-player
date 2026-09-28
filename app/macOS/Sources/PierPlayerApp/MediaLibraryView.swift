@@ -1,7 +1,10 @@
 import AppKit
+import CloudSyncKit
 import SwiftUI
 
 enum MediaLibrarySectionKind: Hashable {
+    case continueWatching
+    case recentlyPlayed
     case recentlyAdded
     case allVideos
     case fileSources
@@ -95,13 +98,19 @@ struct MediaLibraryContentState: Equatable {
         filteredItemCount: Int,
         hasQuery: Bool,
         isRestoring: Bool,
-        isScanning: Bool
+        isScanning: Bool,
+        hasContinueWatching: Bool = false,
+        hasRecentlyPlayed: Bool = false
     ) -> MediaLibraryContentState {
+        let historySections: [MediaLibrarySectionKind] =
+            (hasContinueWatching ? [.continueWatching] : [])
+            + (hasRecentlyPlayed ? [.recentlyPlayed] : [])
+
         guard itemCount > 0 else {
             if isRestoring {
                 return MediaLibraryContentState(mode: .restoring, compactActivity: nil)
             }
-            if sourceCount == 0 {
+            if sourceCount == 0, historySections.isEmpty {
                 return MediaLibraryContentState(mode: .noSources, compactActivity: nil)
             }
             if isScanning {
@@ -109,7 +118,7 @@ struct MediaLibraryContentState: Equatable {
             }
             let sections: [MediaLibrarySectionKind] = hasQuery
                 ? [.noSearchResults, .fileSources]
-                : [.noVideos, .fileSources]
+                : historySections + [.noVideos, .fileSources]
             return MediaLibraryContentState(mode: .content(sections), compactActivity: nil)
         }
 
@@ -119,7 +128,7 @@ struct MediaLibraryContentState: Equatable {
                 ? [.searchResults]
                 : [.noSearchResults, .fileSources]
         } else {
-            sections = [.recentlyAdded, .allVideos, .fileSources]
+            sections = historySections + [.recentlyAdded, .allVideos, .fileSources]
         }
 
         let compactActivity: MediaLibraryCompactActivity?
@@ -147,15 +156,26 @@ struct MediaLibraryView: View {
     @State private var query = ""
     @State private var refreshGeneration = 0
     @State private var playerSelection: MediaLibraryPlayerSelection?
+    @State private var isConfirmingClearPlaybackHistory = false
 
     var body: some View {
         MediaLibraryContentView(
             snapshot: viewModel.snapshot,
             sourceSummaries: model.mediaLibrarySourceSummaries,
+            playbackProgress: model.playbackProgress,
+            sourceNames: model.mediaLibrarySourceNames,
             isRestoring: model.isRestoring,
             isScanning: viewModel.isLoading,
             query: query,
-            play: selectForPlayback,
+            play: { item in
+                selectForPlayback(item)
+            },
+            playFromBeginning: { item in
+                selectForPlayback(item, startMode: .fromBeginning)
+            },
+            removePlaybackHistory: { mediaID in
+                Task { await model.removePlaybackHistory(mediaID: mediaID) }
+            },
             openSource: { destination = .source($0) },
             addSource: addSource
         )
@@ -168,18 +188,51 @@ struct MediaLibraryView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    refreshGeneration &+= 1
+                    refreshLibrary()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Refresh Library")
                 .accessibilityLabel("Refresh Library")
-                .keyboardShortcut("r", modifiers: .command)
                 .disabled(viewModel.isLoading)
             }
+            ToolbarItem(placement: .secondaryAction) {
+                Button {
+                    isConfirmingClearPlaybackHistory = true
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .help("Clear Playback History")
+                .accessibilityLabel("Clear Playback History")
+                .disabled(
+                    model.isLoadingPlaybackHistory
+                        || !model.playbackProgress.contains { !$0.isDeleted }
+                )
+            }
         }
+        .confirmationDialog(
+            "Clear Playback History?",
+            isPresented: $isConfirmingClearPlaybackHistory,
+            titleVisibility: .visible
+        ) {
+            Button("Clear History", role: .destructive) {
+                Task { await model.clearPlaybackHistory() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes saved resume positions from all devices after synchronization.")
+        }
+        .focusedValue(
+            \.refreshMediaLibraryAction,
+            refreshLibrary
+        )
+        .focusedValue(
+            \.clearPlaybackHistoryAction,
+            requestClearPlaybackHistory
+        )
         .task(id: reloadRequest) {
             await viewModel.reload(sources: model.mediaLibrarySources)
+            await model.refreshPlaybackProgress()
         }
         .onChange(of: model.sources.map(\.id)) { _, sourceIDs in
             if let playerSelection, !sourceIDs.contains(playerSelection.source.id) {
@@ -194,9 +247,26 @@ struct MediaLibraryView: View {
                 diagnosticRecorder: diagnostics.recorder,
                 diagnosticContext: diagnostics.context,
                 identityProvider: diagnostics.identityProvider,
-                progressManager: diagnostics.progressManager
+                progressManager: diagnostics.progressManager,
+                startMode: selection.startMode
             )
+            .onDisappear {
+                Task { await model.refreshPlaybackProgress() }
+            }
         }
+    }
+
+    private func refreshLibrary() {
+        guard !viewModel.isLoading else { return }
+        refreshGeneration &+= 1
+    }
+
+    private func requestClearPlaybackHistory() {
+        guard !model.isLoadingPlaybackHistory,
+              model.playbackProgress.contains(where: { !$0.isDeleted }) else {
+            return
+        }
+        isConfirmingClearPlaybackHistory = true
     }
 
     private var reloadRequest: MediaLibraryReloadRequest {
@@ -207,17 +277,25 @@ struct MediaLibraryView: View {
         )
     }
 
-    private func selectForPlayback(_ item: MediaLibraryItem) {
+    private func selectForPlayback(
+        _ item: MediaLibraryItem,
+        startMode: PlaybackStartMode = .automatic
+    ) {
         guard let source = model.source(id: item.sourceID) else {
             return
         }
-        playerSelection = MediaLibraryPlayerSelection(item: item, source: source)
+        playerSelection = MediaLibraryPlayerSelection(
+            item: item,
+            source: source,
+            startMode: startMode
+        )
     }
 }
 
 private struct MediaLibraryPlayerSelection: Identifiable {
     let item: MediaLibraryItem
     let source: AppModel.ConnectedSource
+    let startMode: PlaybackStartMode
 
     var id: String { item.id }
 }
@@ -225,13 +303,47 @@ private struct MediaLibraryPlayerSelection: Identifiable {
 struct MediaLibraryContentView: View {
     let snapshot: MediaLibrarySnapshot
     let sourceSummaries: [MediaLibrarySourceSummary]
+    let playbackProgress: [PlaybackProgress]
+    let sourceNames: [UUID: String]
     let isRestoring: Bool
     let isScanning: Bool
     let query: String
-    let scanLimits: MediaLibraryScanLimits = MediaLibraryScanLimits()
+    let scanLimits: MediaLibraryScanLimits
     let play: (MediaLibraryItem) -> Void
+    let playFromBeginning: (MediaLibraryItem) -> Void
+    let removePlaybackHistory: (String) -> Void
     let openSource: (UUID) -> Void
     let addSource: () -> Void
+
+    init(
+        snapshot: MediaLibrarySnapshot,
+        sourceSummaries: [MediaLibrarySourceSummary],
+        playbackProgress: [PlaybackProgress] = [],
+        sourceNames: [UUID: String] = [:],
+        isRestoring: Bool,
+        isScanning: Bool,
+        query: String,
+        scanLimits: MediaLibraryScanLimits = MediaLibraryScanLimits(),
+        play: @escaping (MediaLibraryItem) -> Void,
+        playFromBeginning: @escaping (MediaLibraryItem) -> Void = { _ in },
+        removePlaybackHistory: @escaping (String) -> Void = { _ in },
+        openSource: @escaping (UUID) -> Void,
+        addSource: @escaping () -> Void
+    ) {
+        self.snapshot = snapshot
+        self.sourceSummaries = sourceSummaries
+        self.playbackProgress = playbackProgress
+        self.sourceNames = sourceNames
+        self.isRestoring = isRestoring
+        self.isScanning = isScanning
+        self.query = query
+        self.scanLimits = scanLimits
+        self.play = play
+        self.playFromBeginning = playFromBeginning
+        self.removePlaybackHistory = removePlaybackHistory
+        self.openSource = openSource
+        self.addSource = addSource
+    }
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -247,6 +359,14 @@ struct MediaLibraryContentView: View {
 
     private var allItems: [MediaLibraryItem] {
         MediaLibraryPresentation.allVideos(snapshot.items)
+    }
+
+    private var playbackHistory: PlaybackHistorySnapshot {
+        PlaybackHistoryPresentation.make(
+            progress: playbackProgress,
+            items: snapshot.items,
+            sourceNames: sourceNames
+        )
     }
 
     private var sortedFailures: [MediaLibraryScanFailure] {
@@ -266,7 +386,9 @@ struct MediaLibraryContentView: View {
             filteredItemCount: filteredItems.count,
             hasQuery: !trimmedQuery.isEmpty,
             isRestoring: isRestoring,
-            isScanning: isScanning
+            isScanning: isScanning,
+            hasContinueWatching: !playbackHistory.continueWatching.isEmpty,
+            hasRecentlyPlayed: !playbackHistory.recentlyPlayed.isEmpty
         )
     }
 
@@ -300,8 +422,8 @@ struct MediaLibraryContentView: View {
 
                 content
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
         }
         .background(.background)
     }
@@ -310,7 +432,7 @@ struct MediaLibraryContentView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(summary.primaryText)
-                    .font(.title2.weight(.semibold))
+                    .font(.system(.title2, design: .rounded).weight(.semibold))
                 Text(summary.secondaryText)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -319,12 +441,20 @@ struct MediaLibraryContentView: View {
             Spacer()
 
             if let compactActivity = contentState.compactActivity {
-                HStack(spacing: 8) {
+                Label {
+                    Text(compactActivity.accessibilityLabel)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                } icon: {
                     ProgressView()
                         .controlSize(.small)
-                    Text(compactActivity.accessibilityLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.thinMaterial, in: Capsule())
+                .overlay {
+                    Capsule()
+                        .strokeBorder(Color.primary.opacity(0.08))
                 }
                 .accessibilityElement(children: .combine)
                     .accessibilityLabel(compactActivity.accessibilityLabel)
@@ -342,12 +472,11 @@ struct MediaLibraryContentView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(2)
         }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 40)
-        .background(Color.yellow.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 14)
+        .frame(minHeight: 44)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.yellow.opacity(0.18))
         }
         .accessibilityElement(children: .combine)
@@ -369,7 +498,11 @@ struct MediaLibraryContentView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08))
+        }
         .accessibilityElement(children: .combine)
     }
 
@@ -392,6 +525,10 @@ struct MediaLibraryContentView: View {
     @ViewBuilder
     private func contentSection(_ section: MediaLibrarySectionKind) -> some View {
         switch section {
+        case .continueWatching:
+            continueWatchingSection
+        case .recentlyPlayed:
+            recentlyPlayedSection
         case .recentlyAdded:
             recentSection
         case .allVideos:
@@ -405,6 +542,26 @@ struct MediaLibraryContentView: View {
         case .noVideos:
             noVideosState
         }
+    }
+
+    private var continueWatchingSection: some View {
+        PlaybackHistorySection(
+            title: "Continue Watching",
+            items: playbackHistory.continueWatching,
+            play: play,
+            playFromBeginning: playFromBeginning,
+            remove: removePlaybackHistory
+        )
+    }
+
+    private var recentlyPlayedSection: some View {
+        PlaybackHistorySection(
+            title: "Recently Played",
+            items: playbackHistory.recentlyPlayed,
+            play: play,
+            playFromBeginning: playFromBeginning,
+            remove: removePlaybackHistory
+        )
     }
 
     private var recentSection: some View {
@@ -471,6 +628,11 @@ struct MediaLibraryContentView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 280)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07))
+        }
         .accessibilityElement(children: .combine)
     }
 
@@ -484,6 +646,7 @@ struct MediaLibraryContentView: View {
                 Label("Add Source", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
         .frame(maxWidth: .infinity, minHeight: 300)
     }

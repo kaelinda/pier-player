@@ -99,6 +99,105 @@ import Testing
     #expect(result.sources.isEmpty)
 }
 
+@Test func newerLocalProgressTombstoneWinsOverOlderRemoteProgress() async throws {
+    let fixture = try SyncFixture()
+    defer { fixture.cleanup() }
+    let sourceID = UUID()
+    let mediaID = String(repeating: "f", count: 64)
+    let remote = try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 45,
+        duration: 100,
+        modifiedAt: Date(timeIntervalSince1970: 10)
+    )
+    let tombstone = try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 0,
+        duration: 1,
+        modifiedAt: Date(timeIntervalSince1970: 20),
+        isCompleted: true,
+        isDeleted: true
+    )
+    await fixture.transport.setSnapshot(
+        CloudSyncSnapshot(sources: [], progress: [remote])
+    )
+
+    let result = await fixture.coordinator.synchronize(
+        local: CloudSyncSnapshot(sources: [], progress: [tombstone])
+    )
+
+    #expect(result.progress == [tombstone])
+    #expect(await fixture.transport.savedMutations.isEmpty)
+}
+
+@Test func staleLocalProgressCannotResurrectRemoteTombstone() async throws {
+    let fixture = try SyncFixture()
+    defer { fixture.cleanup() }
+    let sourceID = UUID()
+    let mediaID = String(repeating: "1", count: 64)
+    let stale = try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 45,
+        duration: 100,
+        modifiedAt: Date(timeIntervalSince1970: 10)
+    )
+    let tombstone = try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 0,
+        duration: 1,
+        modifiedAt: Date(timeIntervalSince1970: 20),
+        isCompleted: true,
+        isDeleted: true
+    )
+    await fixture.transport.setSnapshot(
+        CloudSyncSnapshot(sources: [], progress: [tombstone])
+    )
+
+    let result = await fixture.coordinator.synchronize(
+        local: CloudSyncSnapshot(sources: [], progress: [stale])
+    )
+
+    #expect(result.progress == [tombstone])
+    #expect(await fixture.transport.savedMutations.isEmpty)
+}
+
+@Test func newerRemoteProgressWinsOverOlderPendingTombstone() async throws {
+    let fixture = try SyncFixture()
+    defer { fixture.cleanup() }
+    let sourceID = UUID()
+    let mediaID = String(repeating: "2", count: 64)
+    let remote = try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 70,
+        duration: 100,
+        modifiedAt: Date(timeIntervalSince1970: 30)
+    )
+    let tombstone = try PlaybackProgress(
+        mediaID: mediaID,
+        sourceID: sourceID,
+        position: 0,
+        duration: 1,
+        modifiedAt: Date(timeIntervalSince1970: 20),
+        isCompleted: true,
+        isDeleted: true
+    )
+    await fixture.transport.setSnapshot(
+        CloudSyncSnapshot(sources: [], progress: [remote])
+    )
+    try await fixture.stateStore.enqueue(.deleteProgress(tombstone))
+
+    let result = await fixture.coordinator.synchronize(local: .empty)
+
+    #expect(result.progress == [remote])
+    #expect(await fixture.transport.savedMutations.isEmpty)
+    #expect(try await fixture.stateStore.pendingMutations().isEmpty)
+}
+
 private struct SyncFixture {
     let directory: URL
     let fileURL: URL

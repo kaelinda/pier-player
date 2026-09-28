@@ -30,6 +30,41 @@ import Testing
         #expect(try await store.load(sourceID: sourceID) == nil)
     }
 
+    @Test func synchronizableReaderFallsBackToLocalKeychainItem() async throws {
+        let service = "app.pier-player.tests.\(UUID().uuidString)"
+        let sourceID = UUID()
+        let localStore = KeychainCredentialStore(service: service, synchronizesCredentials: false)
+        let productionStore = KeychainCredentialStore(service: service, synchronizesCredentials: true)
+        defer { deleteAllKeychainItems(service: service) }
+
+        try await localStore.save(
+            sourceID: sourceID,
+            credential: try SMBCredential(username: "viewer", password: "local-secret"),
+            domain: nil
+        )
+
+        let loaded = try #require(try await productionStore.load(sourceID: sourceID))
+        #expect(loaded.credential.username == "viewer")
+        #expect(loaded.credential.password == "local-secret")
+    }
+
+    @Test func synchronizableDeleteRemovesLocalFallbackItem() async throws {
+        let service = "app.pier-player.tests.\(UUID().uuidString)"
+        let sourceID = UUID()
+        let localStore = KeychainCredentialStore(service: service, synchronizesCredentials: false)
+        let productionStore = KeychainCredentialStore(service: service, synchronizesCredentials: true)
+        defer { deleteAllKeychainItems(service: service) }
+
+        try await localStore.save(
+            sourceID: sourceID,
+            credential: try SMBCredential(username: "viewer", password: "local-secret"),
+            domain: nil
+        )
+
+        try await productionStore.delete(sourceID: sourceID)
+        #expect(try await localStore.load(sourceID: sourceID) == nil)
+    }
+
     @Test func sourceIDsUseSeparateOpaqueAccounts() async throws {
         let service = "app.pier-player.tests.\(UUID().uuidString)"
         let firstID = UUID()

@@ -30,6 +30,10 @@ public actor PlaybackProgressStore {
     }
 
     public func progress(mediaID: String) throws -> PlaybackProgress? {
+        try record(mediaID: mediaID).flatMap { $0.isDeleted ? nil : $0 }
+    }
+
+    public func record(mediaID: String) throws -> PlaybackProgress? {
         try load().first { $0.mediaID == mediaID }
     }
 
@@ -45,6 +49,10 @@ public actor PlaybackProgressStore {
 
     public func removeAll(sourceID: UUID) throws {
         try save(try load().filter { $0.sourceID != sourceID })
+    }
+
+    public func remove(mediaID: String) throws {
+        try save(try load().filter { $0.mediaID != mediaID })
     }
 
     public func replaceAll(_ values: [PlaybackProgress]) throws {
