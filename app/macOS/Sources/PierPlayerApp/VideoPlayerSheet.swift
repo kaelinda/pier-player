@@ -8,6 +8,15 @@ struct VideoPlayerSheet: View {
     let item: MediaSourceItem
     @StateObject private var playerModel: VideoPlayerModel
     @Environment(\.dismiss) private var dismiss
+    let queuePosition: String?
+    let autoplayEnabled: Bool?
+    let canGoPrevious: Bool
+    let canGoNext: Bool
+    let onPrevious: (() -> Void)?
+    let onNext: (() -> Void)?
+    let onToggleAutoplay: (() -> Void)?
+    let onPlaybackEnded: (() -> Void)?
+    @State private var didNotifyPlaybackEnded = false
 
     @MainActor
     init(
@@ -17,9 +26,25 @@ struct VideoPlayerSheet: View {
         diagnosticContext: DiagnosticContext? = nil,
         identityProvider: (any DiagnosticIdentityProviding)? = nil,
         progressManager: (any PlaybackProgressManaging)? = nil,
-        startMode: PlaybackStartMode = .automatic
+        startMode: PlaybackStartMode = .automatic,
+        queuePosition: String? = nil,
+        autoplayEnabled: Bool? = nil,
+        canGoPrevious: Bool = false,
+        canGoNext: Bool = false,
+        onPrevious: (() -> Void)? = nil,
+        onNext: (() -> Void)? = nil,
+        onToggleAutoplay: (() -> Void)? = nil,
+        onPlaybackEnded: (() -> Void)? = nil
     ) {
         self.item = item
+        self.queuePosition = queuePosition
+        self.autoplayEnabled = autoplayEnabled
+        self.canGoPrevious = canGoPrevious
+        self.canGoNext = canGoNext
+        self.onPrevious = onPrevious
+        self.onNext = onNext
+        self.onToggleAutoplay = onToggleAutoplay
+        self.onPlaybackEnded = onPlaybackEnded
         _playerModel = StateObject(
             wrappedValue: VideoPlayerModel(
                 item: item,
@@ -35,6 +60,14 @@ struct VideoPlayerSheet: View {
 
     init(item: MediaSourceItem, playerModel: VideoPlayerModel) {
         self.item = item
+        self.queuePosition = nil
+        self.autoplayEnabled = nil
+        self.canGoPrevious = false
+        self.canGoNext = false
+        self.onPrevious = nil
+        self.onNext = nil
+        self.onToggleAutoplay = nil
+        self.onPlaybackEnded = nil
         _playerModel = StateObject(wrappedValue: playerModel)
     }
 
@@ -45,7 +78,13 @@ struct VideoPlayerSheet: View {
             VStack(spacing: 0) {
                 playerHeader
                 Spacer(minLength: 0)
-                PlaybackControlsView(model: playerModel)
+                PlaybackControlsView(
+                    model: playerModel,
+                    canGoPrevious: canGoPrevious,
+                    canGoNext: canGoNext,
+                    previous: onPrevious,
+                    next: onNext
+                )
             }
         }
         .frame(minWidth: 760, idealWidth: 960, minHeight: 520, idealHeight: 640)
@@ -54,6 +93,15 @@ struct VideoPlayerSheet: View {
         .environment(\.colorScheme, .dark)
         .task {
             await playerModel.start()
+        }
+        .onChange(of: playerModel.snapshot.state) { _, state in
+            if state == .ended {
+                guard !didNotifyPlaybackEnded else { return }
+                didNotifyPlaybackEnded = true
+                onPlaybackEnded?()
+            } else {
+                didNotifyPlaybackEnded = false
+            }
         }
         .onDisappear {
             Task { await playerModel.stop() }
@@ -78,6 +126,22 @@ struct VideoPlayerSheet: View {
             }
 
             Spacer(minLength: 12)
+            if let queuePosition {
+                Label(queuePosition, systemImage: "list.number")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            if let autoplayEnabled, let onToggleAutoplay {
+                Button(action: onToggleAutoplay) {
+                    Image(systemName: autoplayEnabled ? "play.circle.fill" : "play.circle")
+                        .foregroundStyle(.white.opacity(0.86))
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(PlayerChromeButtonStyle())
+                .help(autoplayEnabled ? "Turn Off Autoplay" : "Turn On Autoplay")
+                .accessibilityLabel(autoplayEnabled ? "Turn Off Autoplay" : "Turn On Autoplay")
+            }
             statusLabel
 
             Button {

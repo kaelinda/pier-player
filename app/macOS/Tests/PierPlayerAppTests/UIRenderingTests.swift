@@ -464,6 +464,35 @@ func playerRendersLongMetadataAtSupportedSizes(size: CGSize) async throws {
 }
 
 @MainActor
+@Test func playbackControlsRenderQueueActionsAtMinimumWidth() async throws {
+    let model = VideoPlayerModel(
+        item: testVideoItem(),
+        source: ModelTestSource(file: ModelTestFile(size: 1_024)),
+        renderer: SampleBufferRenderer(),
+        coordinator: ModelTestCoordinator()
+    )
+    let size = CGSize(width: 760, height: 86)
+    let image = try render(
+        PlaybackControlsView(
+            model: model,
+            canGoPrevious: true,
+            canGoNext: true,
+            previous: {},
+            next: {}
+        )
+        .preferredColorScheme(.dark)
+        .tint(.teal)
+        .frame(width: size.width, height: size.height),
+        at: size
+    )
+
+    #expect(image.size == size)
+    #expect(image.tiffRepresentation?.isEmpty == false)
+    #expect(distinctSampledColorCount(in: image) > 5)
+    try writeSnapshotIfRequested(image, name: "player-controls-queue")
+}
+
+@MainActor
 @Test func videoPlayerSheetRendersPreparingState() throws {
     let size = CGSize(width: 960, height: 640)
     let item = MediaSourceItem(

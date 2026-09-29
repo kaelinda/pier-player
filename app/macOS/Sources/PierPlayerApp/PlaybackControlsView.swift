@@ -25,6 +25,24 @@ enum PlaybackControlCopy {
 
 struct PlaybackControlsView: View {
     @ObservedObject var model: VideoPlayerModel
+    let canGoPrevious: Bool
+    let canGoNext: Bool
+    let previous: (() -> Void)?
+    let next: (() -> Void)?
+
+    init(
+        model: VideoPlayerModel,
+        canGoPrevious: Bool = false,
+        canGoNext: Bool = false,
+        previous: (() -> Void)? = nil,
+        next: (() -> Void)? = nil
+    ) {
+        self.model = model
+        self.canGoPrevious = canGoPrevious
+        self.canGoNext = canGoNext
+        self.previous = previous
+        self.next = next
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -47,6 +65,18 @@ struct PlaybackControlsView: View {
             .foregroundStyle(.white.opacity(0.68))
 
             HStack(spacing: 12) {
+                if let previous {
+                    Button(action: previous) {
+                        Image(systemName: "backward.end.fill")
+                            .foregroundStyle(.white.opacity(canGoPrevious ? 0.9 : 0.36))
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(PlayerChromeButtonStyle())
+                    .disabled(!canGoPrevious)
+                    .help("Previous Video")
+                    .accessibilityLabel("Previous Video")
+                }
+
                 Button {
                     Task { await model.togglePlayback() }
                 } label: {
@@ -59,6 +89,18 @@ struct PlaybackControlsView: View {
                 .buttonStyle(PlayerChromeButtonStyle())
                 .help(model.snapshot.intendsToPlay ? "Pause" : "Play")
                 .accessibilityLabel(model.snapshot.intendsToPlay ? "Pause" : "Play")
+
+                if let next {
+                    Button(action: next) {
+                        Image(systemName: "forward.end.fill")
+                            .foregroundStyle(.white.opacity(canGoNext ? 0.9 : 0.36))
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(PlayerChromeButtonStyle())
+                    .disabled(!canGoNext)
+                    .help("Next Video")
+                    .accessibilityLabel("Next Video")
+                }
 
                 Button {
                     model.toggleMute()

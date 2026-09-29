@@ -10,7 +10,7 @@ struct SourceBrowserView: View {
     @State private var items: [MediaSourceItem] = []
     @State private var isLoading = false
     @State private var loadError: String?
-    @State private var selectedFile: MediaSourceItem?
+    @State private var selectedQueue: SourceBrowserQueueSelection?
     @State private var refreshGeneration = 0
 
     var body: some View {
@@ -39,17 +39,13 @@ struct SourceBrowserView: View {
         .task(id: BrowserLoadRequest(path: path, generation: refreshGeneration)) {
             await load()
         }
-        .sheet(item: $selectedFile) { item in
-            if let connectedSource = model.source(id: sourceID) {
-                let diagnostics = model.makePlaybackDiagnosticDependencies()
-                VideoPlayerSheet(
-                    item: item,
-                    source: connectedSource.source,
-                    diagnosticRecorder: diagnostics.recorder,
-                    diagnosticContext: diagnostics.context,
-                    identityProvider: diagnostics.identityProvider,
-                    progressManager: diagnostics.progressManager
-                )
+        .sheet(item: $selectedQueue) { selection in
+            PlaybackQueuePlayerView(
+                entries: selection.entries,
+                startIndex: selection.startIndex
+            )
+            .onDisappear {
+                Task { await model.refreshPlaybackProgress() }
             }
         }
     }
@@ -135,7 +131,7 @@ struct SourceBrowserView: View {
             }
         } else if item.isSupportedVideo {
             Button {
-                selectedFile = item
+                selectForPlayback(item)
             } label: {
                 MediaItemRow(item: item)
             }
@@ -145,6 +141,27 @@ struct SourceBrowserView: View {
             MediaItemRow(item: item)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func selectForPlayback(_ item: MediaSourceItem) {
+        guard model.source(id: sourceID) != nil else { return }
+        let entries = items
+            .filter(\.isSupportedVideo)
+            .map { media in
+                PlaybackQueueEntry(
+                    sourceID: sourceID,
+                    sourceName: model.configuredSource(id: sourceID)?.displayName
+                        ?? "Network Source",
+                    media: media
+                )
+            }
+        guard let startIndex = entries.firstIndex(where: { $0.media.id == item.id }) else {
+            return
+        }
+        selectedQueue = SourceBrowserQueueSelection(
+            entries: entries,
+            startIndex: startIndex
+        )
     }
 
     private var folderName: String {
@@ -176,6 +193,18 @@ struct SourceBrowserView: View {
         }
 
         isLoading = false
+    }
+}
+
+private struct SourceBrowserQueueSelection: Identifiable {
+    let entries: [PlaybackQueueEntry]
+    let startIndex: Int
+
+    var id: String {
+        guard entries.indices.contains(startIndex) else {
+            return "empty-browser-queue"
+        }
+        return entries[startIndex].id
     }
 }
 

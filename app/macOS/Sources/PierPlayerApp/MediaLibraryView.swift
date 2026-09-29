@@ -235,19 +235,17 @@ struct MediaLibraryView: View {
             await model.refreshPlaybackProgress()
         }
         .onChange(of: model.sources.map(\.id)) { _, sourceIDs in
-            if let playerSelection, !sourceIDs.contains(playerSelection.source.id) {
+            if let playerSelection,
+               playerSelection.entries.contains(where: {
+                   !sourceIDs.contains($0.sourceID)
+               }) {
                 self.playerSelection = nil
             }
         }
         .sheet(item: $playerSelection) { selection in
-            let diagnostics = model.makePlaybackDiagnosticDependencies()
-            VideoPlayerSheet(
-                item: selection.item.media,
-                source: selection.source.source,
-                diagnosticRecorder: diagnostics.recorder,
-                diagnosticContext: diagnostics.context,
-                identityProvider: diagnostics.identityProvider,
-                progressManager: diagnostics.progressManager,
+            PlaybackQueuePlayerView(
+                entries: selection.entries,
+                startIndex: selection.startIndex,
                 startMode: selection.startMode
             )
             .onDisappear {
@@ -281,23 +279,38 @@ struct MediaLibraryView: View {
         _ item: MediaLibraryItem,
         startMode: PlaybackStartMode = .automatic
     ) {
-        guard let source = model.source(id: item.sourceID) else {
+        guard model.source(id: item.sourceID) != nil else { return }
+        let entries = MediaLibraryPresentation
+            .allVideos(viewModel.snapshot.items)
+            .map { media in
+                PlaybackQueueEntry(
+                    sourceID: media.sourceID,
+                    sourceName: media.sourceName,
+                    media: media.media
+                )
+            }
+        guard let startIndex = entries.firstIndex(where: { $0.id == item.id }) else {
             return
         }
         playerSelection = MediaLibraryPlayerSelection(
-            item: item,
-            source: source,
+            entries: entries,
+            startIndex: startIndex,
             startMode: startMode
         )
     }
 }
 
 private struct MediaLibraryPlayerSelection: Identifiable {
-    let item: MediaLibraryItem
-    let source: AppModel.ConnectedSource
+    let entries: [PlaybackQueueEntry]
+    let startIndex: Int
     let startMode: PlaybackStartMode
 
-    var id: String { item.id }
+    var id: String {
+        guard entries.indices.contains(startIndex) else {
+            return "empty-playback-queue"
+        }
+        return entries[startIndex].id
+    }
 }
 
 struct MediaLibraryContentView: View {

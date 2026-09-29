@@ -18,11 +18,16 @@ The current `main` branch provides:
 - Persisted sources, automatic reconnection, hierarchical file browsing, and
   source removal.
 - A media library view with bounded scanning, search, recently added videos,
-  scan-limit feedback, and direct access to each connected source.
+  playback history, scan-limit feedback, and direct access to each connected
+  source.
+- Resume positions are stored locally, can synchronize through private CloudKit,
+  and are presented as Continue Watching and Recently Played shelves.
 - Progressive FFmpeg playback for common containers including MP4/MOV/M4V, MKV,
   WebM, AVI, MPEG-TS, FLV, MPEG/MPG/VOB, OGV, 3GP, ASF, and WMV.
 - VideoToolbox decode when available, with software fallback.
 - Audio-track selection plus embedded and external text subtitle handling.
+- Queue-aware playback from the library and source browser, with previous/next
+  controls, optional autoplay, and automatic transition at end of file.
 - Shared source, cache, playback-state, and telemetry foundations for later
   Apple-platform clients.
 - Privacy-bounded local diagnostics for resource access and playback behavior,
